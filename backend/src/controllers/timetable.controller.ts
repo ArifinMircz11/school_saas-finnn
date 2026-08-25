@@ -1,0 +1,56 @@
+import { Request, Response } from 'express';
+import { prisma } from '../config/database';
+import { ApiError, ok, created } from '../utils/response';
+import { timetableSchema } from '../validators';
+import { auditLog } from '../utils/audit';
+import { schoolOf } from './student.controller';
+
+export async function createTimetableEntry(req: Request, res: Response) {
+  const body = timetableSchema.parse(req.body);
+  const schoolId = schoolOf(req);
+  const section = await prisma.section.findUnique({ where: { id: body.sectionId } });
+  if (!section || section.schoolId !== schoolId) throw new ApiError(404, 'Section not found');
+  const subject = await prisma.subject.findUnique({ where: { id: body.subjectId } });
+  if (!subject || subject.schoolId !== schoolId) throw new ApiError(404, 'Subject not found');
+  const teacher = await prisma.teacher.findUnique({ where: { id: body.teacherId } });
+  if (!teacher || teacher.schoolId !== schoolId) throw new ApiError(404, 'Teacher not found');
+  // Conflict check: teacher or section already booked at this timeslot.
+  const conflict = await prisma.timetable.findFirst({
+    where: { schoolId, day: body.day, OR: [
+      { teacherId: body.teacherId, startTime: body.startTime },
+      { sectionId: body.sectionId, startTime: body.startTime },
+    ] },
+  });
+  if (conflict) {
+    const entry = await prisma.timetable.create({ data: { schoolId, sectionId: body.sectionId, subjectId: body.subjectId, teacherId: body.teacherId, day: body.day, startTime: body.startTime, endTime: body.endTime } });
+    return created(res, entry, 'Timetable entry created (conflict allowed after warning)');
+  }
+  const entry = await prisma.timetable.create({ data: { schoolId, sectionId: body.sectionId, subjectId: body.subjectId, teacherId: body.teacherId, day: body.day, startTime: body.startTime, endTime: body.endTime } });
+  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'CREATE_TIMETABLE', module: 'TIMETABLE' });
+  return created(res, entry, 'Timetable entry created');
+}
+
+export async function getTimetable(req: Request, res: Response) {
+  const schoolId = schoolOf(req);
+  const { sectionId, teacherId, day, studentId } = req.query as { sectionId?: string; teacherId?: string; day?: string; studentId?: string };
+  const where: any = { schoolId };
+  if (sectionId) where.sectionId = sectionId;
+  if (teacherId) where.teacherId = teacherId;
+  if (day) where.day = day;
+  if (studentId) {
+    const student = await prisma.student.findUnique({ where: { id: studentId } });
+    if (!student || student.schoolId !== schoolId) throw new ApiError(404, 'Student not found');
+    where.OR = [{ sectionId: student.sectionId }, { sectionId: student.classId }];
+    delete where.sectionId;
+  }
+  const entries = await prisma.timetable.findMany({
+    where, include: { section: { include: { class: true } }, subject: true, teacher: true },
+    orderBy: [{ day: 'asc' }, { startTime: 'asc' }],
+  });
+  // Group by day for display.
+  const grouped = entries.reduce((acc: any, e) => {
+    (acc[e.day] = acc[e.day] || []).push(e);
+    return acc;
+  }, {});
+  return ok(res, { entries, grouped }, 'Timetable fetched');
+}

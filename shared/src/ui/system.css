@@ -1,0 +1,90 @@
+/* Global design system styles shared by every dashboard.
+   Imported via each app's main stylesheet to keep the look consistent. */
+:root {
+  --saa-primary: #4f46e5;
+  --saa-primary-dark: #4338ca;
+  --saa-secondary: #0ea5e9;
+  --saa-success: #16a34a;
+  --saa-warning: #d97706;
+  --saa-danger: #dc2626;
+  --saa-muted: #6b7280;
+  --saa-surface: #ffffff;
+  --saa-surface-alt: #f8fafc;
+  --saa-border: #e5e7eb;
+  --saa-text: #111827;
+  --saa-text-muted: #6b7280;
+  --saa-radius: 10px;
+  --saa-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 6px 16px rgba(0, 0, 0, 0.05);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  color: var(--saa-text);
+  background: var(--saa-surface-alt);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 { color: var(--saa-text); }
+a { color: var(--saa-primary); text-decoration: none; }
+
+.saa-card {
+  background: var(--saa-surface);
+  border: 1px solid var(--saa-border);
+  border-radius: var(--saa-radius);
+  box-shadow: var(--saa-shadow);
+  padding: 20px;
+}
+
+.saa-stat {
+  background: var(--saa-surface);
+  border: 1px solid var(--saa-border);
+  border-radius: var(--saa-radius);
+  padding: 20px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.saa-stat .label { color: var(--saa-text-muted); font-size: 14px; }
+.saa-stat .value { font-size: 28px; font-weight: 700; color: var(--saa-text); }
+
+.saa-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--saa-primary); color: #fff; border: none;
+  padding: 9px 16px; border-radius: 8px; cursor: pointer; font-size: 14px;
+}
+.saa-btn:hover { background: var(--saa-primary-dark); }
+.saa-btn.secondary { background: var(--saa-surface); color: var(--saa-text); border: 1px solid var(--saa-border); }
+.saa-btn.danger { background: var(--saa-danger); }
+
+.saa-input, .saa-select, .saa-textarea {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--saa-border);
+  border-radius: 8px; font-size: 14px; background: var(--saa-surface); color: var(--saa-text);
+}
+.saa-label { display: block; font-size: 13px; color: var(--saa-text-muted); margin-bottom: 6px; }
+
+.saa-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.saa-table th, .saa-table td {
+  text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--saa-border);
+}
+.saa-table th { color: var(--saa-text-muted); font-weight: 600; }
+
+.saa-badge {
+  display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px;
+}
+.saa-badge.green { background: #dcfce7; color: #166534; }
+.saa-badge.red { background: #fee2e2; color: #991b1b; }
+.saa-badge.amber { background: #fef3c7; color: #92400e; }
+.saa-badge.slate { background: #e2e8f0; color: #334155; }
+
+.saa-toast {
+  position: fixed; bottom: 20px; right: 20px; z-index: 1000;
+  background: var(--saa-text); color: #fff; padding: 12px 18px;
+  border-radius: 8px; box-shadow: var(--saa-shadow);
+}
+
+.saa-page-title { font-size: 26px; font-weight: 700; margin: 0 0 4px; }
+
+@media (max-width: 768px) {
+  .saa-table { font-size: 12px; }
+}
