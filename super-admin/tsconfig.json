@@ -13,8 +13,12 @@
     "isolatedModules": true,
     "noEmit": true,
     "baseUrl": ".",
-    "paths": { "@shared/*": ["../shared/src/*"] },
+    "paths": {
+      "@saas/api-client": ["../packages/api-client/src/index.ts"],
+      "@saas/shared-ui": ["../packages/shared-ui/src/index.ts"],
+      "@saas/shared-ui/styles.css": ["../packages/shared-ui/src/system.css"]
+    },
     "types": ["vite/client"]
   },
-  "include": ["src", "../shared/src"]
+  "include": ["src"]
 }

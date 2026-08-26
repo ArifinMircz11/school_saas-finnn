@@ -4,10 +4,10 @@ import React from 'react';
 export function Btn({
   children, variant, onClick, type = 'button', disabled, className,
 }: {
-  children: React.ReactNode; variant?: 'primary' | 'secondary' | 'danger';
+  children: React.ReactNode; variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
   onClick?: () => void; type?: 'button' | 'submit'; disabled?: boolean; className?: string;
 }) {
-  const cls = variant === 'secondary' ? 'saa-btn secondary' : variant === 'danger' ? 'saa-btn danger' : 'saa-btn';
+    const cls = variant === 'secondary' ? 'saa-btn secondary' : variant === 'danger' ? 'saa-btn danger' : variant === 'ghost' ? 'saa-btn saa-btn-ghost' : 'saa-btn';
   return (
     <button type={type} className={[cls, className].filter(Boolean).join(' ')} disabled={disabled} onClick={onClick}>
       {children}

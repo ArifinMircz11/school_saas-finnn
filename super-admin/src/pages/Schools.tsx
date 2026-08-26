@@ -49,7 +49,10 @@ export const SchoolsByStatus = () => {
 export const SchoolDetail = () => {
   const { id } = useParams();
   const { data } = useQuery({ queryKey: ['school', id], queryFn: () => api(`/schools/${id}`) });
+  // GET /schools/:id/usage — quota usage computed server-side (super-admin).
+  const { data: usageData } = useQuery({ queryKey: ['school-usage', id], queryFn: () => api<any>(`/schools/${id}/usage`), enabled: !!id });
   const s = data?.data;
+  const usage = usageData?.data;
   return (
     <Page title={(s as any)?.name || 'School'} subtitle={`School details & subscription`}>
       {s ? (
@@ -61,6 +64,15 @@ export const SchoolDetail = () => {
           <p><b>Teachers:</b> {(s as any)._count?.teachers || 0}</p>
         </div>
       ) : <Empty title="Loading" />}
+      {usage ? (
+        <div className="saa-card" style={{ marginTop: 16 }}>
+          <h3 style={{ marginTop: 0 }}>Usage (plan limits)</h3>
+          <p><b>Students:</b> {usage.usage?.students ?? 0} / {usage.limits?.maxStudents ?? '∞'}</p>
+          <p><b>Teachers:</b> {usage.usage?.teachers ?? 0} / {usage.limits?.maxTeachers ?? '∞'}</p>
+          <p><b>Storage:</b> {usage.usage?.storageMb ?? 0} MB / {usage.limits?.maxStorageMb ?? '∞'} MB</p>
+          <p><b>Subscription:</b> {usage.plan?.name || 'No plan'}</p>
+        </div>
+      ) : null}
     </Page>
   );
 };

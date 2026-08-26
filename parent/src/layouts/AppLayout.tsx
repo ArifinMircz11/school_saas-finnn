@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Outlet } from 'react-router-dom';
-import { Layout } from '@shared/index';
+import { Layout } from '@saas/shared-ui';
+import { getUser } from '@saas/api-client';
 
 const menu = [
   { to: '/', label: 'Dashboard', icon: '🏠' },
@@ -18,5 +19,10 @@ const menu = [
 ];
 
 export default function AppLayout() {
-  return <Layout brand="Parent Portal" brandShort="👪" menu={menu} roleKey="PARENT"><Outlet /></Layout>;
+  const user = getUser();
+  const isParent = !!user && user.roles.includes('PARENT');
+  // One dashboard serves both students and parents; only the branding adapts.
+  const brand = isParent ? 'Parent Portal' : 'Student Portal';
+  const roleKey = isParent ? 'PARENT' : 'STUDENT';
+  return <Layout brand={brand} brandShort="🎓" menu={menu} roleKey={roleKey}><Outlet /></Layout>;
 }

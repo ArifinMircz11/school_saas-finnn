@@ -29,7 +29,6 @@ model School {
   address         String?
   city            String?
   state           String?
-  postalCode      String?
   country         String   @default("IN")
   logoUrl         String?
   status          String   @default("PENDING")
@@ -59,7 +58,6 @@ model School {
   feeStructures   FeeStructure[]
   studentFees     StudentFee[]
   feePayments     FeePayment[]
-  receipt         FeeReceipt[]
   subscriptions   SchoolSubscription[]
   exams           Exam[]
   timetables      Timetable[]
@@ -92,7 +90,6 @@ model User {
   avatarUrl     String?
   emailVerified Boolean   @default(false)
   isActive      Boolean   @default(true)
-  createdByAdminId String?
   lastLoginAt   DateTime?
   deletedAt     DateTime?
   createdAt     DateTime  @default(now())
@@ -108,6 +105,8 @@ model User {
   staff           Staff?
   principal       PrincipalProfile?
   notifications   Notification[]
+  @@index([schoolId])
+  @@index([deletedAt])
 }
 
 model UserRoleAssignment {
@@ -148,6 +147,7 @@ model RefreshToken {
   expiresAt  DateTime
   revokedAt  DateTime?
   createdAt  DateTime @default(now())
+  @@index([userId, expiresAt])
 }
 
 model EmailOtp {
@@ -341,6 +341,7 @@ model Admission {
   documents     AdmissionDocument[]
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
+  @@index([schoolId, status])
 }
 
 model AdmissionDocument {
@@ -397,6 +398,7 @@ model StudentFee {
   dueDate     DateTime?
   payments    FeePayment[]
   createdAt   DateTime  @default(now())
+  @@index([schoolId, status])
 }
 
 model FeePayment {
@@ -412,19 +414,9 @@ model FeePayment {
   collectedBy  String?
   paidAt       DateTime   @default(now())
   receiptNo    String?
-  receipts     FeeReceipt[]
+  @@index([schoolId, paidAt])
 }
 
-model FeeReceipt {
-  id        String @id @default(cuid())
-  schoolId  String
-  school    School @relation(fields: [schoolId], references: [id])
-  paymentId String
-  payment   FeePayment @relation(fields: [paymentId], references: [id])
-  receiptNo String @unique
-  pdfUrl    String?
-  createdAt DateTime @default(now())
-}
 // ------------ ATTENDANCE ------------
 model Attendance {
   id        String   @id @default(cuid())
@@ -438,6 +430,7 @@ model Attendance {
   remarks   String?
   createdAt DateTime @default(now())
   @@unique([studentId, date])
+  @@index([schoolId, date, studentId])
 }
 
 // ------------ HOMEWORK ------------
@@ -458,6 +451,7 @@ model Homework {
   published     Boolean            @default(true)
   submissions   HomeworkSubmission[]
   createdAt     DateTime           @default(now())
+  @@index([schoolId, sectionId])
 }
 
 model HomeworkSubmission {
@@ -487,6 +481,7 @@ model Exam {
   subjects  ExamSubject[]
   results   ExamResult[]
   createdAt DateTime        @default(now())
+  @@index([schoolId, startDate])
 }
 
 model ExamSubject {
@@ -519,6 +514,8 @@ model ExamResult {
   published     Boolean    @default(false)
   createdAt     DateTime   @default(now())
   @@unique([examSubjectId, studentId])
+  @@index([schoolId, examId])
+  @@index([schoolId, studentId])
 }
 
 // ------------ TIMETABLE ------------
@@ -536,9 +533,8 @@ model Timetable {
   startTime String
   endTime   String
   createdAt DateTime @default(now())
+  @@index([schoolId, day])
 }
-
-// ------------ NOTICES & NOTIFICATIONS ------------
 model Notice {
   id        String   @id @default(cuid())
   schoolId  String
@@ -560,6 +556,8 @@ model Notification {
   message   String
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
+  @@index([schoolId, userId, read])
+  @@index([createdAt])
 }
 
 // ------------ DOCUMENTS & CERTIFICATES ------------
@@ -577,6 +575,7 @@ model StudentDocument {
   verified   Boolean  @default(false)
   uploadedBy String
   createdAt  DateTime @default(now())
+  @@index([schoolId, studentId])
 }
 
 model Certificate {
@@ -590,6 +589,7 @@ model Certificate {
   pdfUrl    String?
   issuedAt  DateTime @default(now())
   createdBy String
+  @@index([schoolId, studentId])
 }
 // ------------ SUBSCRIPTIONS ------------
 model SubscriptionPlan {
@@ -674,20 +674,6 @@ model PrincipalProfile {
   title             String?
   approvalWorkflow  Boolean  @default(true) // admission requires principal approval when true
   createdAt         DateTime @default(now())
-  permissions       PrincipalPermission[]
-}
-
-// School-configurable granular permissions granted to a principal account.
-// The authoritative runtime check still uses UserPermission; this table records
-// the school's configured policy so School Admin can toggle them.
-model PrincipalPermission {
-  id                 String           @id @default(cuid())
-  principalProfileId String
-  profile            PrincipalProfile @relation(fields: [principalProfileId], references: [id])
-  permission         String
-  granted            Boolean          @default(true)
-
-  @@unique([principalProfileId, permission])
 }
 
 // Centralized approval center used by the Principal (and optionally School Admin).

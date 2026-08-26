@@ -86,6 +86,8 @@ export const studentSchema = z.object({
   bloodGroup: z.string().optional(),
   address: z.string().optional(),
   photoUrl: z.string().optional(),
+  email: z.string().email().optional(),        // student's own login email (unique per student)
+  password: z.string().min(6).optional(),      // student login password (auto-generated if omitted)
   parentEmail: z.string().email().optional(),
   parentName: z.string().optional(),
   parentPhone: z.string().optional(),
@@ -196,3 +198,81 @@ export const ticketSchema = z.object({
   priority: z.string().optional(),
 });
 export const impersonateSchema = z.object({ userId: z.string().min(1) });
+
+// ---------- USERS & PERMISSIONS ----------
+export const userRoleEnum = z.enum(['SUPER_ADMIN', 'SCHOOL_ADMIN', 'PRINCIPAL', 'TEACHER', 'PARENT', 'STUDENT', 'STAFF']);
+
+/** New-account / password-change policy: >= 8 chars with at least one letter and one digit. */
+export const strongPasswordSchema = z
+  .string()
+  .min(8, 'Password must be at least 8 characters')
+  .regex(/^(?=.*[A-Za-z])(?=.*\d)/, 'Password must contain at least one letter and one number');
+
+/** Create a brand-new User account (school admin must pass users.manage at the route). */
+export const createUserSchema = z.object({
+  email: z.string().email(),
+  password: strongPasswordSchema,
+  firstName: z.string().min(1),
+  lastName: z.string().optional(),
+  phone: z.string().optional(),
+  roles: z.array(userRoleEnum).optional(),
+  permissionKeys: z.array(z.string()).optional(),
+  schoolId: z.string().optional(), // super-admin only; ignored for tenant users
+  title: z.string().optional(),    // principal profile title
+});
+
+/** Partial PATCH of name/phone/status/password. */
+export const updateUserSchema = z.object({
+  firstName: z.string().min(1).optional(),
+  lastName: z.string().optional(),
+  phone: z.string().optional(),
+  isActive: z.boolean().optional(),
+  password: strongPasswordSchema.optional(),
+});
+
+export const setUserRolesSchema = z.object({
+  roles: z.array(userRoleEnum),
+});
+
+export const setUserPermissionsSchema = z.object({
+  permissionKeys: z.array(z.string()),
+});
+
+/** Self-service password change (authenticated), separate from admin user management. */
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: strongPasswordSchema,
+});
+
+// ---------- ADMISSIONS (public form) ----------
+export const admissionSchema = z.object({
+  schoolCode: z.string().min(1),
+  firstName: z.string().min(1),
+  lastName: z.string().optional(),
+  gender: z.enum(['MALE', 'FEMALE', 'OTHER']).optional(),
+  dob: z.string().optional(),
+  classId: z.string().optional(),
+  parentName: z.string().optional(),
+  parentEmail: z.string().email().optional(),
+  parentPhone: z.string().optional(),
+});
+
+// ---------- DOCUMENTS & CERTIFICATES ----------
+export const studentDocumentUploadSchema = z.object({
+  studentId: z.string().min(1),
+  type: z.string().optional(),
+  title: z.string().optional(),
+});
+export const generateCertificateSchema = z.object({
+  studentId: z.string().min(1),
+  type: z.string().optional(),
+});
+
+// ---------- PRINCIPAL APPROVALS ----------
+export const createApprovalSchema = z.object({
+  type: z.string().optional(),
+  referenceId: z.string().optional(),
+  reference: z.string().optional(),
+  title: z.string().min(1),
+  description: z.string().optional(),
+});

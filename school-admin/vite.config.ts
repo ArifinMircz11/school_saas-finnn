@@ -6,7 +6,21 @@ import { resolve } from 'path';
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: { '@shared': resolve(__dirname, '../shared/src') },
+    alias: {
+      '@saas/api-client': resolve(__dirname, '../packages/api-client/src/index.ts'),
+      '@saas/shared-ui/styles.css': resolve(__dirname, '../packages/shared-ui/src/system.css'),
+      '@saas/shared-ui': resolve(__dirname, '../packages/shared-ui/src/index.ts'),
+    },
   },
   server: { port: 5174, fs: { allow: ['..'] } },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom', 'react-router-dom'],
+          query: ['@tanstack/react-query'],
+        },
+      },
+    },
+  },
 });

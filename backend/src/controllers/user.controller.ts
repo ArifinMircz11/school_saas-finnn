@@ -4,6 +4,9 @@ import { ApiError, ok, created } from '../utils/response';
 import { hashPassword } from '../utils/password';
 import { auditLog } from '../utils/audit';
 import { schoolOf } from './student.controller';
+import { createUserSchema, updateUserSchema, setUserRolesSchema, setUserPermissionsSchema } from '../validators';
+import { SUPER_ADMIN_ONLY_PERMISSIONS } from '../config/permissions';
+import crypto from 'crypto';
 
 const PRINCIPAL_DEFAULT_PERMISSIONS = [
   'students.view', 'teachers.view', 'attendance.view', 'results.view', 'admissions.view', 'admissions.review',
@@ -15,20 +18,93 @@ const PRINCIPAL_DEFAULT_PERMISSIONS = [
   'principal.fees.overview.view', 'principal.reports.view', 'principal.approvals.manage',
 ];
 
-/** Grant the standard principal permission set to a user (idempotent). */
-async function grantPrincipalDefaults(userId: string) {
-  const perms = await prisma.permission.findMany({ where: { key: { in: PRINCIPAL_DEFAULT_PERMISSIONS } }, select: { id: true, key: true } });
+/** Permissions a TEACHER needs so their dashboard (attendance, marks, homework,
+ *  results) has no dead ends. Granted automatically when a teacher is created. */
+export const TEACHER_DEFAULT_PERMISSIONS = [
+  'students.view', 'teachers.view', 'attendance.view', 'attendance.mark', 'attendance.update',
+  'homework.view', 'homework.create', 'homework.grade', 'exams.view', 'results.view',
+  'results.enter', 'results.publish', 'timetable.view', 'notices.view', 'notifications.view',
+];
+
+/** Permissions a STUDENT needs to view their own data without dead ends.
+ *  Granted automatically when a student account is created. */
+export const STUDENT_DEFAULT_PERMISSIONS = [
+  'students.view', 'attendance.view', 'homework.view', 'exams.view',
+  'results.view', 'timetable.view', 'notices.view', 'notifications.view',
+  'documents.view', 'certificates.view',
+];
+
+/** Permissions a SCHOOL_ADMIN needs to actually run their school dashboard.
+ *  Includes 'users.manage' so a legitimately-promoted school admin can manage
+ *  their own school's users (create teacher/principal/student accounts) — the
+ *  route-level users.manage guard is what blocks everyone else. Deliberately
+ *  excludes the SUPER_ADMIN_ONLY permissions. Granted automatically when a
+ *  SCHOOL_ADMIN account is created. */
+export const SCHOOL_ADMIN_DEFAULT_PERMISSIONS = [
+  'students.view', 'students.create', 'students.update', 'students.delete',
+  'parents.view', 'parents.create', 'parents.update',
+  'teachers.view', 'teachers.create', 'teachers.update', 'teachers.delete',
+  'fees.view', 'fees.create', 'fees.collect', 'fees.refund', 'fees.assign',
+  'attendance.view', 'attendance.mark', 'attendance.update',
+  'homework.view', 'homework.create', 'homework.grade',
+  'exams.view', 'exams.create', 'results.view', 'results.enter', 'results.publish',
+  'timetable.view', 'timetable.manage',
+  'academic.manage',
+  'documents.view', 'documents.upload', 'documents.download', 'documents.verify',
+  'certificates.view', 'certificates.generate',
+  'notices.view', 'notices.create',
+  'admissions.view', 'admissions.review',
+  'users.manage',
+  'reports.view', 'reports.export',
+  'settings.manage',
+  'notifications.view', 'tickets.view', 'tickets.manage',
+  'audit.view',
+  'principal.analytics.view', 'principal.attendance.analytics.view',
+  'principal.academic.performance.view', 'principal.teacher.performance.view',
+  'principal.admissions.approve', 'principal.results.approve', 'principal.results.publish',
+  'principal.leave.approve', 'principal.certificates.approve',
+  'principal.fees.overview.view', 'principal.reports.view', 'principal.approvals.manage',
+];
+
+/** Grant the standard teacher permission set to a user (idempotent). */
+async function grantTeacherDefaults(userId: string) {
+  const perms = await prisma.permission.findMany({ where: { key: { in: TEACHER_DEFAULT_PERMISSIONS } }, select: { id: true } });
   const existing = await prisma.userPermission.findMany({ where: { userId }, select: { permissionId: true } });
   const existingIds = new Set(existing.map((e) => e.permissionId));
   const toCreate = perms.filter((p) => !existingIds.has(p.id)).map((p) => ({ userId, permissionId: p.id, granted: true }));
   if (toCreate.length) await prisma.userPermission.createMany({ data: toCreate });
-  // record the school's configured principal permission policy on the profile too
-  const profile = await prisma.principalProfile.findUnique({ where: { userId } });
-  if (profile) {
-    await prisma.principalPermission.createMany({
-      data: perms.map((p) => ({ principalProfileId: profile.id, permission: p.key, granted: true })), skipDuplicates: true,
-    });
-  }
+  return toCreate.length;
+}
+export { grantTeacherDefaults };
+
+/** Grant the standard student permission set to a user (idempotent). */
+async function grantStudentDefaults(userId: string) {
+  const perms = await prisma.permission.findMany({ where: { key: { in: STUDENT_DEFAULT_PERMISSIONS } }, select: { id: true } });
+  const existing = await prisma.userPermission.findMany({ where: { userId }, select: { permissionId: true } });
+  const existingIds = new Set(existing.map((e) => e.permissionId));
+  const toCreate = perms.filter((p) => !existingIds.has(p.id)).map((p) => ({ userId, permissionId: p.id, granted: true }));
+  if (toCreate.length) await prisma.userPermission.createMany({ data: toCreate });
+  return toCreate.length;
+}
+export { grantStudentDefaults };
+
+/** Grant the standard school-admin permission set to a user (idempotent). */
+async function grantSchoolAdminDefaults(userId: string) {
+  const perms = await prisma.permission.findMany({ where: { key: { in: SCHOOL_ADMIN_DEFAULT_PERMISSIONS } }, select: { id: true } });
+  const existing = await prisma.userPermission.findMany({ where: { userId }, select: { permissionId: true } });
+  const existingIds = new Set(existing.map((e) => e.permissionId));
+  const toCreate = perms.filter((p) => !existingIds.has(p.id)).map((p) => ({ userId, permissionId: p.id, granted: true }));
+  if (toCreate.length) await prisma.userPermission.createMany({ data: toCreate });
+  return toCreate.length;
+}
+
+/** Grant the standard principal permission set to a user (idempotent). */
+async function grantPrincipalDefaults(userId: string) {
+  const perms = await prisma.permission.findMany({ where: { key: { in: PRINCIPAL_DEFAULT_PERMISSIONS } }, select: { id: true } });
+  const existing = await prisma.userPermission.findMany({ where: { userId }, select: { permissionId: true } });
+  const existingIds = new Set(existing.map((e) => e.permissionId));
+  const toCreate = perms.filter((p) => !existingIds.has(p.id)).map((p) => ({ userId, permissionId: p.id, granted: true }));
+  if (toCreate.length) await prisma.userPermission.createMany({ data: toCreate });
 }
 
 export async function listUsers(req: Request, res: Response) {
@@ -44,53 +120,91 @@ export async function listUsers(req: Request, res: Response) {
     ];
   }
   const users = await prisma.user.findMany({
-    where, include: { roles: true },
+    where,
+    include: { roles: true, permissions: { include: { permission: { select: { key: true } } } } },
     orderBy: { createdAt: 'desc' },
   });
   return ok(res, users, 'Users fetched');
 }
 
 export async function createUser(req: Request, res: Response) {
-  const body = req.body;
-  if (!body.email || !body.password || !body.firstName) throw new ApiError(400, 'email, password, firstName required');
+  const body = createUserSchema.parse(req.body);
+  const isSuper = req.auth?.roles.includes('SUPER_ADMIN');
+
+  const roles: string[] = Array.isArray(body.roles) && body.roles.length ? body.roles : ['STAFF'];
+  const permissionKeys: string[] = Array.isArray(body.permissionKeys) ? body.permissionKeys : [];
+
+  // Escalation guards: only a SUPER_ADMIN may create another SUPER_ADMIN, and
+  // only a SUPER_ADMIN may grant platform-level permissions.
+  if (!isSuper && roles.includes('SUPER_ADMIN')) {
+    throw new ApiError(403, 'Only a SUPER_ADMIN can assign the SUPER_ADMIN role');
+  }
+  if (!isSuper && permissionKeys.some((k) => SUPER_ADMIN_ONLY_PERMISSIONS.includes(k))) {
+    throw new ApiError(403, 'Forbidden: only a SUPER_ADMIN may grant platform-level permissions');
+  }
+
   const existing = await prisma.user.findUnique({ where: { email: body.email.toLowerCase() } });
   if (existing) throw new ApiError(409, 'User already exists');
   const passwordHash = await hashPassword(body.password);
-  const roles = Array.isArray(body.roles) && body.roles.length ? body.roles : ['STAFF'];
+
+  // Tenant: school users may only create accounts within their own school.
+  const schoolId = isSuper ? (body.schoolId || null) : (req.auth?.schoolId ?? null);
   const user = await prisma.user.create({
     data: {
-      schoolId: req.auth?.schoolId ?? body.schoolId ?? null,
-      email: body.email.toLowerCase(), firstName: body.firstName, lastName: body.lastName,
+      schoolId,
+      email: body.email.toLowerCase(), firstName: body.firstName, lastName: body.lastName ?? '',
       phone: body.phone, passwordHash, emailVerified: true,
-      roles: { create: roles.map((role: string) => ({ role })) },
+      roles: { create: roles.map((role: string) => ({ role: role as any })) },
+      permissions: permissionKeys.length
+        ? { create: (await prisma.permission.findMany({ where: { key: { in: permissionKeys } }, select: { id: true } })).map((p) => ({ permissionId: p.id, granted: true })) }
+        : undefined,
     },
   });
   if (roles.includes('PRINCIPAL') && user.schoolId) {
     await prisma.principalProfile.create({ data: { schoolId: user.schoolId, userId: user.id, title: body.title } });
     await grantPrincipalDefaults(user.id);
   }
-  await auditLog({ userId: req.auth?.sub, schoolId: req.auth?.schoolId, ip: req.ip, action: 'CREATE_USER', module: 'USERS' });
+  if (roles.includes('TEACHER')) await grantTeacherDefaults(user.id);
+  if (roles.includes('STUDENT')) await grantStudentDefaults(user.id);
+  if (roles.includes('SCHOOL_ADMIN')) await grantSchoolAdminDefaults(user.id);
+  await auditLog({ userId: req.auth?.sub, schoolId: req.auth?.schoolId, ip: req.ip, action: 'CREATE_USER', module: 'USERS', details: { id: user.id, roles } });
   return created(res, { id: user.id, email: user.email }, 'User created');
 }
 
 export async function updateUser(req: Request, res: Response) {
+  const body = updateUserSchema.parse(req.body);
+  // Tenant guard: a school user may only modify accounts that belong to their school.
+  const isSuper = req.auth?.roles.includes('SUPER_ADMIN');
+  const target = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true, schoolId: true } });
+  if (!target) throw new ApiError(404, 'User not found');
+  if (!isSuper && target.schoolId !== req.auth?.schoolId) throw new ApiError(403, 'Forbidden: you may only manage users in your own school');
   const data: any = {};
-  if (req.body.firstName) data.firstName = req.body.firstName;
-  if (req.body.lastName) data.lastName = req.body.lastName;
-  if (req.body.phone) data.phone = req.body.phone;
-  if (typeof req.body.isActive === 'boolean') data.isActive = req.body.isActive;
-  if (req.body.password) data.passwordHash = await hashPassword(req.body.password);
+  if (body.firstName) data.firstName = body.firstName;
+  if (body.lastName) data.lastName = body.lastName;
+  if (body.phone) data.phone = body.phone;
+  if (typeof body.isActive === 'boolean') data.isActive = body.isActive;
+  if (body.password) data.passwordHash = await hashPassword(body.password);
   const user = await prisma.user.update({ where: { id: req.params.id }, data });
   await auditLog({ userId: req.auth?.sub, schoolId: user.schoolId, ip: req.ip, action: 'UPDATE_USER', module: 'USERS' });
   return ok(res, { id: user.id }, 'User updated');
 }
 
 export async function setUserRoles(req: Request, res: Response) {
-  const roles = req.body.roles as string[];
-  if (!Array.isArray(roles)) throw new ApiError(400, 'roles array required');
+  const { roles } = setUserRolesSchema.parse(req.body);
+  const isSuper = req.auth?.roles.includes('SUPER_ADMIN');
+  // Escalation guard: only a SUPER_ADMIN can assign the SUPER_ADMIN role.
+  if (!isSuper && roles.includes('SUPER_ADMIN')) {
+    throw new ApiError(403, 'Only a SUPER_ADMIN can assign the SUPER_ADMIN role');
+  }
+  // Tenant isolation.
+  const target = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true, schoolId: true } });
+  if (!target) throw new ApiError(404, 'User not found');
+  if (!isSuper && target.schoolId !== req.auth?.schoolId) throw new ApiError(403, 'Forbidden: you may only manage users in your own school');
   await prisma.$transaction(async (tx) => {
     await tx.userRoleAssignment.deleteMany({ where: { userId: req.params.id } });
-    await tx.userRoleAssignment.createMany({ data: roles.map((role) => ({ userId: req.params.id, role: role as any, assignedBy: req.auth!.sub })) });
+    if (roles.length) {
+      await tx.userRoleAssignment.createMany({ data: roles.map((role) => ({ userId: req.params.id, role: role as any, assignedBy: req.auth!.sub })) });
+    }
   });
   // keep a principal profile (and default grants) in sync when the role is granted
   if (roles.includes('PRINCIPAL')) {
@@ -100,6 +214,9 @@ export async function setUserRoles(req: Request, res: Response) {
     }
     await grantPrincipalDefaults(req.params.id);
   }
+  if (roles.includes('SCHOOL_ADMIN')) await grantSchoolAdminDefaults(req.params.id);
+  if (roles.includes('TEACHER')) await grantTeacherDefaults(req.params.id);
+  if (roles.includes('STUDENT')) await grantStudentDefaults(req.params.id);
   await auditLog({ userId: req.auth?.sub, schoolId: req.auth?.schoolId, ip: req.ip, action: 'SET_USER_ROLES', module: 'USERS', details: { roles } });
   return ok(res, null, 'Roles updated');
 }
@@ -111,8 +228,15 @@ export async function listPermissions(req: Request, res: Response) {
 }
 
 export async function setUserPermissions(req: Request, res: Response) {
-  const { permissionKeys } = req.body as { permissionKeys: string[] };
-  if (!Array.isArray(permissionKeys)) throw new ApiError(400, 'permissionKeys required');
+  const { permissionKeys } = setUserPermissionsSchema.parse(req.body);
+  const isSuper = req.auth?.roles.includes('SUPER_ADMIN');
+  // Escalation guard: only a SUPER_ADMIN may grant platform-level permissions.
+  if (!isSuper && permissionKeys.some((k) => SUPER_ADMIN_ONLY_PERMISSIONS.includes(k))) {
+    throw new ApiError(403, 'Forbidden: only a SUPER_ADMIN may grant platform-level permissions');
+  }
+  const target = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true, schoolId: true } });
+  if (!target) throw new ApiError(404, 'User not found');
+  if (!isSuper && target.schoolId !== req.auth?.schoolId) throw new ApiError(403, 'Forbidden: you may only manage users in your own school');
   const perms = await prisma.permission.findMany({ where: { key: { in: permissionKeys } }, select: { id: true } });
   await prisma.$transaction(async (tx) => {
     await tx.userPermission.deleteMany({ where: { userId: req.params.id } });

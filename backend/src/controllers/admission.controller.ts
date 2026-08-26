@@ -5,16 +5,18 @@ import { auditLog } from '../utils/audit';
 import { hashPassword, generateAdmissionNo } from '../utils/password';
 import { schoolOf } from './student.controller';
 import { uploadToStorage } from '../middleware/upload';
+import { admissionSchema } from '../validators';
+import crypto from 'crypto';
 
 /** Public admission form - allows anyone to apply to an active school. */
 export async function submitAdmission(req: Request, res: Response) {
-  const body = req.body;
+  const body = admissionSchema.parse(req.body);
   const school = await prisma.school.findFirst({ where: { code: body.schoolCode, status: 'ACTIVE' } });
   if (!school) throw new ApiError(404, 'School not found or inactive');
   const applicationNo = `APP-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
   const admission = await prisma.admission.create({
     data: {
-      schoolId: school.id, applicationNo, firstName: body.firstName, lastName: body.lastName,
+      schoolId: school.id, applicationNo, firstName: body.firstName, lastName: body.lastName || '',
       dob: body.dob ? new Date(body.dob) : null, gender: body.gender, classId: body.classId,
       parentName: body.parentName, parentEmail: body.parentEmail, parentPhone: body.parentPhone,
     },
@@ -60,32 +62,33 @@ export async function uploadAdmissionDocument(req: Request, res: Response) {
 async function convertAdmissionToStudent(admission: any) {
   const schoolId = admission.schoolId;
   const admissionNo = generateAdmissionNo();
-  let parentUser: unknown = null;
-  // Pre-compute the temp parent hash outside the transaction (slow bcrypt).
-  const parentTempHash = admission.parentEmail ? await hashPassword(Math.random().toString(36).slice(2, 12)) : null;
+      // Each student gets a UNIQUE login (even siblings share same parent email —
+  // this login is the student's own, never the parent's).
+  const password = crypto.randomBytes(16).toString('base64').slice(0, 12);
+  const passwordHash = await hashPassword(password);
+  // Always generate a unique email per student (admission-number based).
+  const studentEmail = `${admissionNo.toLowerCase()}@student.${admission.schoolId}.local`;
   const student = await prisma.$transaction(async (tx) => {
-    let parentId: string | undefined;
-    if (admission.parentEmail) {
-      const email = admission.parentEmail.toLowerCase();
-      let user = await tx.user.findUnique({ where: { email } });
-      if (!user) {
-        user = await tx.user.create({
-          data: { schoolId, email, firstName: admission.parentName || 'Parent', lastName: admission.lastName, passwordHash: parentTempHash!, roles: { create: [{ role: 'PARENT' }] } },
-        });
-      }
-      parentUser = user;
-      const existingParent = await tx.parent.findUnique({ where: { userId: user.id } });
-      if (existingParent) parentId = existingParent.id;
-      else {
-        const p = await tx.parent.create({ data: { schoolId, userId: user.id, firstName: admission.parentName || 'Parent', lastName: admission.lastName } });
-        parentId = p.id;
-      }
+    let user = await tx.user.findUnique({ where: { email: studentEmail } });
+    if (!user) {
+      user = await tx.user.create({
+        data: { schoolId, email: studentEmail, firstName: admission.firstName, lastName: admission.lastName, passwordHash, roles: { create: [{ role: 'STUDENT' }] } },
+      });
+    } else {
+      await tx.user.update({ where: { id: user.id }, data: { passwordHash, firstName: admission.firstName, lastName: admission.lastName } });
     }
     const st = await tx.student.create({
-      data: { schoolId, firstName: admission.firstName, lastName: admission.lastName, gender: admission.gender || 'OTHER', dob: admission.dob || new Date(), admissionNo, classId: admission.classId },
+      data: { schoolId, firstName: admission.firstName, lastName: admission.lastName, gender: admission.gender || 'OTHER', dob: admission.dob || new Date(), admissionNo, classId: admission.classId, userId: user.id },
     });
-    if (parentId) await tx.studentParent.create({ data: { studentId: st.id, parentId, relationship: 'PARENT', isPrimary: true } });
+    // Guardian contact info stored as data only (no separate login account).
+    const parent = await tx.parent.create({
+      data: { schoolId, firstName: admission.parentName || 'Guardian', lastName: admission.lastName, phone: admission.parentPhone || null },
+    });
+    await tx.studentParent.create({ data: { studentId: st.id, parentId: parent.id, relationship: 'PARENT', isPrimary: true } });
+    // Grant STUDENT permissions.
+    const { grantStudentDefaults } = await import('./user.controller');
+    await grantStudentDefaults(user.id);
     return st;
   });
-  return { student, parentUserId: (parentUser as any)?.id };
+  return { student };
 }

@@ -5,6 +5,7 @@ import { teacherSchema, parentSchema } from '../validators';
 import { auditLog } from '../utils/audit';
 import { hashPassword } from '../utils/password';
 import { schoolOf } from './student.controller';
+import { grantTeacherDefaults } from './user.controller';
 
 // ---------- TEACHERS ----------
 export async function listTeachers(req: Request, res: Response) {
@@ -26,6 +27,7 @@ export async function createTeacher(req: Request, res: Response) {
   // Generate the temp password hashes up-front (bcrypt is slow and must not
   // hold the interactive transaction open past the hosted-Postgres timeout).
   const tempHash = body.email ? await hashPassword(Math.random().toString(36).slice(2, 12)) : null;
+  let createdUserId: string | undefined;
   const teacher = await prisma.$transaction(async (tx) => {
     let userId: string | undefined;
     if (body.email) {
@@ -35,6 +37,7 @@ export async function createTeacher(req: Request, res: Response) {
         user = await tx.user.create({ data: { schoolId, email, firstName: body.firstName, lastName: body.lastName, passwordHash: tempHash!, roles: { create: [{ role: 'TEACHER' }] } } });
       }
       userId = user.id;
+      createdUserId = user.id;
     }
     return tx.teacher.create({
       data: {
@@ -45,6 +48,8 @@ export async function createTeacher(req: Request, res: Response) {
       },
     });
   });
+  // Grant the teacher's standard permissions so their dashboard has no dead ends.
+  if (createdUserId) await grantTeacherDefaults(createdUserId);
   await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'CREATE_TEACHER', module: 'TEACHERS' });
   return created(res, teacher, 'Teacher created');
 }
@@ -60,27 +65,17 @@ export async function listParents(req: Request, res: Response) {
 export async function createParent(req: Request, res: Response) {
   const body = parentSchema.parse(req.body);
   const schoolId = schoolOf(req);
-  // Generate the temp password hash up-front (slow bcrypt outside the txn).
-  const tempHash = body.email ? await hashPassword(Math.random().toString(36).slice(2, 12)) : null;
-  const parent = await prisma.$transaction(async (tx) => {
-    let userId: string | undefined;
-    if (body.email) {
-      const email = body.email.toLowerCase();
-      let user = await tx.user.findUnique({ where: { email } });
-      if (!user) {
-        user = await tx.user.create({ data: { schoolId, email, firstName: body.firstName, lastName: body.lastName, passwordHash: tempHash!, roles: { create: [{ role: 'PARENT' }] } } });
-      }
-      userId = user.id;
-    }
-    return tx.parent.create({
-      data: {
-        schoolId, userId, firstName: body.firstName, lastName: body.lastName, phone: body.phone,
-        children: body.studentIds ? { create: body.studentIds.map((sid) => ({ studentId: sid, relationship: 'PARENT', isPrimary: false })) } : undefined,
-      },
-    });
+  // Guardians are stored as DATA ONLY (no login). Parents sign in with the
+  // student's credentials, so no separate PARENT-role account is created.
+  const parent = await prisma.parent.create({
+    data: {
+      schoolId, firstName: body.firstName, lastName: body.lastName, phone: body.phone,
+      children: body.studentIds ? { create: body.studentIds.map((sid) => ({ studentId: sid, relationship: 'PARENT', isPrimary: false })) } : undefined,
+    },
+    include: { children: { include: { student: true } } },
   });
   await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'CREATE_PARENT', module: 'PARENTS' });
-  return ok(res, parent, 'Parent created');
+  return ok(res, parent, 'Parent (guardian) created — parents log in with the student\'s credentials');
 }
 
 // ---------- STAFF ----------

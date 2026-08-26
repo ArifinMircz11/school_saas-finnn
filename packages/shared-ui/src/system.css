@@ -56,6 +56,8 @@ a { color: var(--saa-primary); text-decoration: none; }
 .saa-btn:hover { background: var(--saa-primary-dark); }
 .saa-btn.secondary { background: var(--saa-surface); color: var(--saa-text); border: 1px solid var(--saa-border); }
 .saa-btn.danger { background: var(--saa-danger); }
+.saa-btn-ghost { background: transparent; color: var(--saa-primary); border: 1px solid transparent; }
+.saa-btn-ghost:hover { background: rgba(79,70,229,0.08); }
 
 .saa-input, .saa-select, .saa-textarea {
   width: 100%; padding: 10px 12px; border: 1px solid var(--saa-border);

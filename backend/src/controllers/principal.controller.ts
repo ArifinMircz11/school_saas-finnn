@@ -3,6 +3,7 @@ import { prisma } from '../config/database';
 import { ApiError, ok, created } from '../utils/response';
 import { auditLog } from '../utils/audit';
 import { schoolOf } from './student.controller';
+import { createApprovalSchema } from '../validators';
 
 /* ============================================================================
  * PRINCIPAL CONTROLLER
@@ -52,7 +53,7 @@ export async function getPrincipalProfile(req: Request, res: Response) {
   const schoolId = schoolOf(req);
   const profile = await prisma.principalProfile.findFirst({
     where: { userId: req.auth!.sub, schoolId },
-    include: { permissions: true, school: { select: { id: true, name: true, logoUrl: true, settings: true } } },
+    include: { school: { select: { id: true, name: true, logoUrl: true, settings: true } } },
   });
   return ok(res, profile, 'Principal profile fetched');
 }
@@ -420,8 +421,7 @@ export async function listApprovals(req: Request, res: Response) {
 
 export async function createApproval(req: Request, res: Response) {
   const schoolId = schoolOf(req);
-  const { type, referenceId, reference, title, description } = req.body;
-  if (!title) throw new ApiError(400, 'Title required');
+  const { type, referenceId, reference, title, description } = createApprovalSchema.parse(req.body);
   const approval = await prisma.approvalRequest.create({
     data: { schoolId, type, referenceId, reference, title, description, requestedBy: req.auth!.sub },
   });

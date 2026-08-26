@@ -1,4 +1,5 @@
 import { prisma } from '../config/database';
+import config from '../config';
 
 export interface NotificationData {
   schoolId: string;
@@ -55,12 +56,60 @@ export async function notifySection(schoolId: string, sectionId: string, title: 
   ).then((list) => list.length);
 }
 
+/**
+ * Send an email via REST API. Resend is the primary provider; Brevo is the
+ * automatic fallback. Both are configured purely from environment variables
+ * (RESEND_API_KEY / BREVO_API_KEY). Best-effort: never throws, never blocks.
+ *
+ *   RESEND_API_KEY set  -> POST {baseUrl}/emails  (Resend)
+ *   Resend fails/unset  -> POST {baseUrl}/v3/smtp/email (Brevo)
+ *   Neither configured -> logs a stub line and returns { queued: false }
+ */
 export async function sendEmail(to: string, subject: string, html: string) {
-  // Real SMTP wiring would live here using nodemailer + config.smtp.
-  // This is intentionally a no-op stub when SMTP is unconfigured.
-  if (!process.env.SMTP_HOST) {
-    console.log(`[mail stub] to=${to} subject="${subject}"`);
-    return { queued: false, reason: 'SMTP not configured' };
+  const { email } = config;
+
+  // 1) Primary: Resend REST API.
+  if (email.resend.apiKey) {
+    try {
+      const res = await fetch(`${email.resend.baseUrl}/emails`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${email.resend.apiKey}`,
+        },
+        body: JSON.stringify({ from: email.resend.from, to: [to], subject, html }),
+      });
+      if (res.ok) return { queued: true, provider: 'resend' };
+      console.error(`[mail] Resend error ${res.status}: ${await res.text()}`);
+    } catch (e) {
+      console.error('[mail] Resend request failed', e);
+    }
   }
-  return { queued: true };
+
+  // 2) Fallback: Brevo (Sendinblue) REST API.
+  if (email.brevo.apiKey) {
+    try {
+      const res = await fetch(`${email.brevo.baseUrl}/v3/smtp/email`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': email.brevo.apiKey,
+        },
+        body: JSON.stringify({
+          sender: { name: email.brevo.fromName, email: email.brevo.from },
+          to: [{ email: to }],
+          subject,
+          htmlContent: html,
+        }),
+      });
+      if (res.ok) return { queued: true, provider: 'brevo' };
+      console.error(`[mail] Brevo error ${res.status}: ${await res.text()}`);
+    } catch (e) {
+      console.error('[mail] Brevo request failed', e);
+    }
+  }
+
+  // 3) No provider configured — log a stub so flows still work in dev.
+  console.log(`[mail stub] to=${to} subject="${subject}"`);
+  return { queued: false, reason: 'No email provider configured (set RESEND_API_KEY or BREVO_API_KEY)' };
 }

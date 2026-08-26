@@ -57,3 +57,15 @@ export const PERMISSIONS: string[] = [
 ];
 
 export const ALL_PERMISSIONS = PERMISSIONS;
+
+/**
+ * Platform-level capabilities that are tenant-independent. Only a SUPER_ADMIN
+ * may grant these (or the SUPER_ADMIN role itself). Keeping them gated here
+ * (in addition to the route guards) prevents a school admin who holds
+ * 'users.manage' from escalating a school-scoped account to platform admin.
+ */
+export const SUPER_ADMIN_ONLY_PERMISSIONS: string[] = [
+  'schools.manage',
+  'subscriptions.manage',
+  'plans.manage',
+];

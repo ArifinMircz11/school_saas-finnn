@@ -81,3 +81,12 @@ coverage/
 **/tsc-out.txt
 **/build.txt
 **/out.txt
+**/seed.log
+**/seed.txt
+**/seed.json
+backend/prisma/seed
+backend/prisma/seed.log
+backend/prisma/seed.txt
+backend/prisma/seed.json
+# The seed script source itself is tracked on purpose (see backend/prisma/seed.ts).
+!backend/prisma/seed.ts

@@ -46,12 +46,11 @@ export async function assignFees(req: Request, res: Response) {
     await prisma.studentFee.create({ data: { schoolId, studentId, structureId: structure.id, totalAmount: total, discount, paidAmount: 0, status: 'PENDING', dueDate: structure.dueDate } });
     assigned++;
   }
-  for (const studentId of body.studentIds) {
-    const links = await prisma.studentParent.findMany({ where: { studentId }, include: { parent: { include: { user: true } } } });
-    for (const link of links) {
-      if (link.parent.userId) {
-        await sendNotification({ schoolId, userId: link.parent.userId, type: 'FEE', title: 'Fee Assigned', message: `A fee (${structure.name}) of ${total} has been assigned to your ward.` });
-      }
+    for (const studentId of body.studentIds) {
+    // Parents have no login — notify the student directly (parents use student creds).
+    const student = await prisma.student.findUnique({ where: { id: studentId }, select: { userId: true } });
+    if (student?.userId) {
+      await sendNotification({ schoolId, userId: student.userId, type: 'FEE', title: 'Fee Assigned', message: `A fee (${structure.name}) of ${total} has been assigned to your ward.` });
     }
   }
   await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'ASSIGN_FEES', module: 'FEES', details: { count: assigned } });

@@ -1,6 +1,8 @@
+import fs from 'fs';
 import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
+import os from 'os';
 import { v2 as cloudinary } from 'cloudinary';
 import config from '../config';
 import { ApiError } from '../utils/response';
@@ -20,7 +22,14 @@ const ALLOWED_DOC = [
 ];
 const ALLOWED_ALL = [...ALLOWED_IMAGE, ...ALLOWED_DOC];
 
+// Uploaded files land in a dedicated temp dir (not the bare OS temp dir) so that
+// (a) the OS default never fills up with orphaned multer files and (b) cleanup
+// is deterministic. Files are removed after upload (see uploadToStorage below).
+const uploadDir = path.join(os.tmpdir(), 'school-saas-uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
 const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname) || '';
     cb(null, `${Date.now()}-${crypto.randomUUID()}${ext}`);
@@ -45,18 +54,34 @@ export const uploadImage = multer({
   },
 });
 
+/** Best-effort removal of a written temp file. Never throws. */
+export async function cleanupTempFile(filePath?: string): Promise<void> {
+  if (!filePath) return;
+  try {
+    await fs.promises.unlink(filePath);
+  } catch {
+    // Already gone or never existed — nothing to clean up.
+  }
+}
+
 /** Upload a single local temp file to Cloudinary and return its secure URL.
+ *  The temp file is always removed afterwards (success or failure) so the server
+ *  can't accumulate orphaned files and slowly fill its disk.
  *  Falls back to a local placeholder when Cloudinary is not configured. */
 export async function uploadToStorage(filePath: string, folder = config.cloudinary.folder): Promise<string> {
+  const fallback = () => `${config.publicBaseUrl.storage}/${folder}/${path.basename(filePath)}`;
   if (!config.cloudinary.cloudName) {
-    return `https://storage.local/${folder}/${path.basename(filePath)}`;
+    await cleanupTempFile(filePath);
+    return fallback();
   }
   try {
     const result = await cloudinary.uploader.upload(filePath, { folder });
+    await cleanupTempFile(filePath);
     return result.secure_url;
   } catch (e) {
     console.error('Cloudinary upload failed', e);
-    return `https://storage.local/${folder}/${path.basename(filePath)}`;
+    await cleanupTempFile(filePath);
+    return fallback();
   }
 }
 

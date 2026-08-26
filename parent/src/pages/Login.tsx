@@ -1,5 +1,5 @@
-import { LoginShell } from '@shared/index';
+import { LoginShell } from '@saas/shared-ui';
 
 export default function Login() {
-  return <LoginShell appName="Parent Portal" subtitle="Track your children's progress" roleValidator={(r) => r.includes('PARENT')} redirectTo="/" />;
+  return <LoginShell appName="Student & Parent Portal" subtitle="Access your accounts and your children's progress" roleValidator={(r) => r.includes('STUDENT') || r.includes('PARENT')} redirectTo="/" />;
 }

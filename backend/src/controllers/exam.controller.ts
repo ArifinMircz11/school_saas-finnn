@@ -32,7 +32,8 @@ export async function addExamSubject(req: Request, res: Response) {
 // ---------- MARKS ----------
 export async function listMarks(req: Request, res: Response) {
   const { examId, examSubjectId } = req.query as { examId?: string; examSubjectId?: string };
-  const where: any = {};
+  const schoolId = schoolOf(req);
+  const where: any = { schoolId };
   if (examId) where.examId = examId;
   if (examSubjectId) where.examSubjectId = examSubjectId;
   const marks = await prisma.examResult.findMany({ where, include: { student: true, exam: true, examSubject: { include: { subject: true } } } });
@@ -42,8 +43,8 @@ export async function listMarks(req: Request, res: Response) {
 export async function enterMarks(req: Request, res: Response) {
   const body = enterMarksSchema.parse(req.body);
   const schoolId = schoolOf(req);
-  const es = await prisma.examSubject.findUnique({ where: { id: body.examSubjectId } });
-  if (!es) throw new ApiError(404, 'Exam subject not found');
+  const es = await prisma.examSubject.findUnique({ where: { id: body.examSubjectId }, include: { exam: true } });
+  if (!es || es.exam?.schoolId !== schoolId) throw new ApiError(404, 'Exam subject not found');
   for (const m of body.marks) {
     if (Number(m.marksObtained) > es.maxMarks) throw new ApiError(400, 'Marks exceed max for a student');
     const existing = await prisma.examResult.findUnique({ where: { examSubjectId_studentId: { examSubjectId: body.examSubjectId, studentId: m.studentId } } });
@@ -58,17 +59,20 @@ export async function enterMarks(req: Request, res: Response) {
 }
 
 export async function publishResults(req: Request, res: Response) {
+  const schoolId = schoolOf(req);
   const { examId } = req.body as { examId: string };
-  const examSubjects = await prisma.examSubject.findMany({ where: { examId }, select: { id: true } });
+  const exam = await prisma.exam.findUnique({ where: { id: examId } });
+  if (!exam || exam.schoolId !== schoolId) throw new ApiError(404, 'Exam not found');
+  const examSubjects = await prisma.examSubject.findMany({ where: { examId, exam: { schoolId } }, select: { id: true } });
   for (const es of examSubjects) {
     await prisma.examResult.updateMany({ where: { examSubjectId: es.id }, data: { published: true } });
   }
-  const students = await prisma.student.findMany({ where: { schoolId: schoolOf(req) }, select: { userId: true } });
+  const students = await prisma.student.findMany({ where: { schoolId }, select: { userId: true } });
   for (const s of students) {
     if (!s.userId) continue;
-    await sendNotification({ schoolId: schoolOf(req), userId: s.userId, type: 'RESULT', title: 'Results Published', message: 'Exam results are now available.' });
+    await sendNotification({ schoolId, userId: s.userId, type: 'RESULT', title: 'Results Published', message: 'Exam results are now available.' });
   }
-  await auditLog({ userId: req.auth?.sub, schoolId: schoolOf(req), ip: req.ip, action: 'PUBLISH_RESULTS', module: 'EXAMS' });
+  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'PUBLISH_RESULTS', module: 'EXAMS' });
   return ok(res, null, 'Results published');
 }
 
@@ -76,12 +80,22 @@ export async function studentResults(req: Request, res: Response) {
   const { studentId, examId, publishedOnly } = req.query as { studentId?: string; examId?: string; publishedOnly?: string };
   const schoolId = schoolOf(req);
   const where: any = { schoolId };
-  const isStudentRole = req.auth?.roles.includes('STUDENT');
-  if (isStudentRole) {
+    const isStudentRole = req.auth?.roles.includes('STUDENT');
+  if (isStudentRole && !studentId) {
+    // Students see only their own results (and siblings via guardians, if any).
+    // Parents log in with a student's credentials, so the STUDENT branch also
+    // covers the parent use-case. To see a sibling, pass ?studentId=<siblingId>
+    // after the sibling has been looked up on the dashboard.
     const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub } });
     if (!student) throw new ApiError(404, 'Student not found');
-    where.studentId = student.id;
-  } else if (studentId) {
+        // Allow viewing siblings (same guardians) within the same school.
+    const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p) => p.parentId);
+    const siblingIds = parentIds.length
+      ? (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds } }, select: { studentId: true } })).map((p) => p.studentId).filter((id) => id !== student.id)
+      : [];
+    const ids = [student.id, ...siblingIds];
+    where.studentId = { in: ids };
+  } else if (isStudentRole && studentId) {
     const student = await prisma.student.findUnique({ where: { id: studentId } });
     if (!student || student.schoolId !== schoolId) throw new ApiError(404, 'Student not found');
     where.studentId = studentId;

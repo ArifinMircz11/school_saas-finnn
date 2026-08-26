@@ -7,6 +7,8 @@ export interface ChildInfo {
     class?: { name: string } | null; section?: { name: string } | null;
     attendance?: { status: string }[]; fees?: { structure?: { name: string }; totalAmount: string; paidAmount: string; discount?: string }[];
   };
+  parents?: any[];          // guardians (data-only records, shown on dashboard)
+  reportAnalysis?: any;     // derived performance analysis from exam results
 }
 
 const Ctx = createContext<{ children: ChildInfo[]; child: ChildInfo | null; setChild: (c: ChildInfo) => void }>({ children: [], child: null, setChild: () => {} });
@@ -17,10 +19,11 @@ export function ChildProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!getUser()) return;
-    api<{ data: { children: ChildInfo[]; unread: number } }>('/dashboard').then((res) => {
-      if (res.success && res.data?.children) {
-        setData({ children: res.data.children, unread: res.data.unread ?? 0 });
-        setChild((c) => c || res.data.children[0] || null);
+    api<any>('/dashboard').then((res) => {
+      const payload = res?.data?.data;
+      if (res.success && payload?.children) {
+        setData({ children: payload.children, unread: payload.unread ?? 0 });
+        setChild((c) => c || payload.children[0] || null);
       }
     });
   }, []);

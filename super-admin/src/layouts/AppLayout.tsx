@@ -1,6 +1,6 @@
 import React from 'react';
 import { Outlet } from 'react-router-dom';
-import { Layout } from '@shared/index';
+import { Layout } from '@saas/shared-ui';
 
 const menu = [
   { to: '/', label: 'Dashboard', icon: '📊' },

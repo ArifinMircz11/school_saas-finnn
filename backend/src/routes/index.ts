@@ -42,12 +42,18 @@ router.post('/auth/bootstrap', asyncHandler(authSuper.bootstrapSuperAdmin));
 
 // Public admission form (anyone can apply)
 router.post('/public/admissions', publicLimiter, asyncHandler(admissions.submitAdmission));
-router.post('/public/admissions/:id/documents', publicLimiter, upload.single('document'), asyncHandler(admissions.uploadAdmissionDocument));
+// Public admission document upload. NOTE: there is currently NO public admission
+  // frontend app in this monorepo, so this endpoint is backend-API only (consumed by
+  // any future / unauthenticated admission form). It is intentionally NOT listed as a
+  // supported feature of the five dashboards because no UI calls it yet. Use the school
+  // dashboard's Documents page (/documents/upload) for authenticated document uploads.
+  router.post('/public/admissions/:id/documents', publicLimiter, upload.single('document'), asyncHandler(admissions.uploadAdmissionDocument));
 
 // ---------- Authenticated base ----------
 router.use(requireAuth);
 
 router.get('/auth/me', asyncHandler(authAccount.me));
+router.post('/auth/change-password', asyncHandler(authAccount.changePassword));
 router.post('/auth/impersonate', requireRole('SUPER_ADMIN'), asyncHandler(authSuper.loginAs));
 router.get('/dashboard', asyncHandler(dashboard.getDashboard));
 
@@ -141,13 +147,20 @@ router.patch('/tickets/:id', asyncHandler(misc.updateTicket));
 router.get('/audit-logs', asyncHandler(misc.listAuditLogs));
 
 // ---------- Users & Permissions ----------
-router.get('/users', asyncHandler(users.listUsers));
-router.post('/users', asyncHandler(users.createUser));
-router.patch('/users/:id', asyncHandler(users.updateUser));
-router.post('/users/:id/roles', asyncHandler(users.setUserRoles));
-router.get('/permissions', asyncHandler(users.listPermissions));
-router.post('/users/:id/permissions', asyncHandler(users.setUserPermissions));
-router.post('/permissions/seed', asyncHandler(users.seedPermissions));
+// All user-management routes are gated behind 'users.manage'. These four were
+// previously open to any authenticated user (only tenant-checked inside the
+// controller), which let a Parent/Student target their own account to grant
+// themselves SCHOOL_ADMIN or any permission. The route guard is the primary
+// control; requireAuth is applied above for everything after this point.
+// /permissions/seed is additionally restricted to SUPER_ADMIN (defense in depth
+// on top of the in-controller role check).
+router.get('/users', requirePermission('users.manage'), asyncHandler(users.listUsers));
+router.post('/users', requirePermission('users.manage'), asyncHandler(users.createUser));
+router.patch('/users/:id', requirePermission('users.manage'), asyncHandler(users.updateUser));
+router.post('/users/:id/roles', requirePermission('users.manage'), asyncHandler(users.setUserRoles));
+router.get('/permissions', requirePermission('users.manage'), asyncHandler(users.listPermissions));
+router.post('/users/:id/permissions', requirePermission('users.manage'), asyncHandler(users.setUserPermissions));
+router.post('/permissions/seed', superOnly, asyncHandler(users.seedPermissions));
 
 // ---------- SUPER ADMIN ONLY ----------
 router.get('/schools', superOnly, asyncHandler(schools.listSchools));

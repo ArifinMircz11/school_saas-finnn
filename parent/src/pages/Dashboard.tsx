@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Page, api, getUser } from '../services/api';
+import { Page, Stat, Empty, api, getUser } from '../services/api';
 import { useChildren } from '../lib/ChildContext';
 
 export default function Dashboard() {
@@ -7,12 +7,12 @@ export default function Dashboard() {
   const user = getUser();
   const [sel, setSel] = useState<string | null>(null);
 
-  const activeChild = children.find((c) => c.student.id === (sel || child?.student.id)) || child;
+    const activeChild = children.find((c) => c.student.id === (sel || child?.student.id)) || child;
   const first = activeChild?.student;
 
   return (
-    <Page title={`Welcome, ${user?.firstName || 'Parent'}`} subtitle="Overview of your children">
-      {children.length === 0 ? <p>No children linked yet.</p> : (
+    <Page title={`Welcome, ${user?.firstName || 'Student'}`} subtitle="Overview of your academic performance">
+      {children.length === 0 ? <p>No student data available.</p> : (
         <>
           {children.length > 1 ? (
             <div className="saa-card" style={{ marginBottom: 16 }}>
@@ -40,6 +40,45 @@ export default function Dashboard() {
                 <Stat label="Pending Fees" value={'₹' + pendingSum(first).toLocaleString('en-IN')} />
                 <Stat label="Fee Records" value={first.fees?.length ?? 0} />
               </div>
+            </div>
+          ) : null}
+
+          {/* Parents section: guardians are shown so student/parent can see
+              contact info and performance report analysis together. */}
+          {activeChild?.parents && activeChild.parents.length > 0 ? (
+            <div className="saa-card" style={{ marginTop: 20 }}>
+              <h3 style={{ marginTop: 0 }}>Parents / Guardians</h3>
+              {activeChild.parents.map((p: any) => (
+                <div key={p.id} style={{ padding: '8px 0', borderBottom: '1px solid #e5e7eb' }}>
+                  <b>{p.firstName} {p.lastName}</b> <span style={{ fontSize: 12, color: '#6b7280' }}>({p.relationship || 'Parent'})</span>
+                  <div style={{ fontSize: 13, color: '#6b7280' }}>{p.phone || '—'} {p.email ? `· ${p.email}` : ''}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {/* Performance report analysis (derived from exam results) */}
+          {activeChild?.reportAnalysis ? (
+            <div className="saa-card" style={{ marginTop: 20 }}>
+              <h3 style={{ marginTop: 0 }}>Performance Report</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 14, marginTop: 10 }}>
+                <Stat label="Overall Average" value={activeChild.reportAnalysis.overallAverage + '%'} />
+                <Stat label="Exams Taken" value={activeChild.reportAnalysis.totalExams} />
+                <Stat label="Trend" value={activeChild.reportAnalysis.examTrend} />
+              </div>
+              {activeChild.reportAnalysis.subjectAverages && activeChild.reportAnalysis.subjectAverages.length > 0 ? (
+                <div style={{ marginTop: 14 }}>
+                  <b>Subject Averages</b>
+                  <div style={{ display: 'grid', gap: 4, marginTop: 8, fontSize: 14 }}>
+                    {activeChild.reportAnalysis.subjectAverages.map((s: any) => (
+                      <div key={s.name} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>{s.name}</span>
+                        <span style={{ color: '#4f46e5', fontWeight: 600 }}>{s.average}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </>

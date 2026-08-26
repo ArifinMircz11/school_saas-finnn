@@ -13,6 +13,10 @@ export default function Plans() {
   const { data } = useQuery({ queryKey: ['plans'], queryFn: () => api<Plan[]>('/plans') });
   const plans = ((data?.success && data.data) || []) as Plan[];
 
+  // GET /subscriptions — list tenant subscriptions (super-admin).
+  const { data: subsData } = useQuery({ queryKey: ['subscriptions'], queryFn: () => api<any[]>('/subscriptions') });
+  const subs = (subsData?.success ? subsData.data : []) || [];
+
   const save = useMutation({
     mutationFn: (p: any) => api('/plans', { method: 'POST', body: p }),
     onSuccess: () => { toast('Plan saved'); setDraft(emptyPlan); qc.invalidateQueries({ queryKey: ['plans'] }); },
@@ -36,6 +40,14 @@ export default function Plans() {
             rows={plans.map((p) => [p.name, '₹' + p.price, p.period, p.maxStudents, p.maxTeachers, p.maxStorage + 'MB', p.isActive ? 'Active' : 'Inactive'])} />
         </div>
       )}
+
+      {subs.length > 0 ? (
+        <div className="saa-card" style={{ marginTop: 20 }}>
+          <h3 style={{ marginTop: 0 }}>Active Subscriptions</h3>
+          <Table headers={['School', 'Plan', 'Status', 'Period']}
+            rows={subs.map((s: any) => [s.school?.name || s.schoolId, s.plan?.name || '—', s.status, `${new Date(s.startDate).toLocaleDateString()} → ${new Date(s.endDate).toLocaleDateString()}`])} />
+        </div>
+      ) : null}
     </Page>
   );
 }

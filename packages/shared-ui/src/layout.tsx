@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { api, clearSession, getUser } from '../lib/api';
-import { useUnreadCount } from '../lib/hooks';
-import { colors, roleBanners } from '../lib/tokens';
+import { api, clearSession, getUser, useUnreadCount } from '@saas/api-client';
+import { colors, roleBanners } from './tokens';
 
 export interface NavItem { to: string; label: string; icon?: string; }
 
@@ -15,6 +14,13 @@ export function Layout({ brand, brandShort, menu, roleKey, children }: {
   const unread = roleKey !== 'SUPER_ADMIN' ? useUnreadCount() : 0;
   const user = getUser();
   const banner = roleBanners[roleKey];
+  const sidebarWidth = 250;
+  const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' && window.innerWidth < 768);
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   const logout = async () => {
     const refresh = localStorage.getItem('saa_refresh');
@@ -27,8 +33,10 @@ export function Layout({ brand, brandShort, menu, roleKey, children }: {
     <div style={{ display: 'flex', minHeight: '100vh', background: '#f8fafc' }}>
       {/* Sidebar */}
       <aside style={{
-        width: 250, background: colors.sidebar, color: '#fff', flexShrink: 0, padding: '20px 0',
+        width: sidebarWidth, background: colors.sidebar, color: '#fff', flexShrink: 0, padding: '20px 0',
         position: 'fixed', top: 0, bottom: 0, left: 0, zIndex: 50, overflowY: 'auto',
+        transform: isMobile && !open ? `translateX(-${sidebarWidth}px)` : 'translateX(0)',
+        transition: 'transform 0.2s ease-in-out',
       }}>
         <div style={{ padding: '0 20px 20px', borderBottom: '1px solid rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 18 }}>{brandShort || '🎓'}</span>
@@ -51,11 +59,16 @@ export function Layout({ brand, brandShort, menu, roleKey, children }: {
         </nav>
       </aside>
 
-      {/* Main */}
-      <div style={{ marginLeft: 220, flex: 1, display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+      {/* Mobile overlay — closes sidebar when tapping the backdrop */}
+      {isMobile && open ? (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 45 }} onClick={() => setOpen(false)} />
+      ) : null}
+
+      {/* Main — marginLeft now matches sidebar width (was 220, causing 30px content overlap) */}
+      <div style={{ marginLeft: isMobile ? 0 : sidebarWidth, flex: 1, display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
         {/* Topbar */}
-        <header style={{ height: 56, background: '#fff', borderBottom: '1px solid ' + colors.border, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', position: 'sticky', top: 0, zIndex: 40 }}>
-          <button onClick={() => setOpen(!open)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer' }}>☰</button>
+        <header style={{ height: 56, background: '#fff', borderBottom: '1px solid ' + colors.border, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', position: 'sticky', top: 0, zIndex: 55 }}>
+          {isMobile ? <button onClick={() => setOpen(!open)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer' }}>☰</button> : <div style={{ width: 32 }} />}
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             {banner ? <span style={{ background: banner.color, color: '#fff', borderRadius: 999, padding: '2px 12px', fontSize: 12 }}>{banner.label}</span> : null}
             <Bell unread={unread} />

@@ -8,8 +8,8 @@ export interface AuthUser {
   [k: string]: unknown;
 }
 
-let apiBaseUrl = 'http://localhost:5000/api';
-export const setApiBase = (u: string) => { apiBaseUrl = u; };
+let apiBaseUrl = (import.meta.env.VITE_API_URL as string || (import.meta.env.DEV ? 'http://localhost:5000/api' : '')).replace(/\/$/, '');
+export const setApiBase = (u: string) => { apiBaseUrl = u.replace(/\/$/, ''); };
 
 const KEY_USER = 'saa_user';
 const KEY_ACCESS = 'saa_access';
@@ -58,9 +58,9 @@ async function tryRefresh(): Promise<boolean> {
   } catch { clearSession(); return false; }
 }
 
-export interface ApiResult<T> { success: boolean; message?: string; data: T; }
+export interface ApiResult<T> { success: boolean; message?: string; code?: string; status?: number; data: T; }
 
-interface RequestOptions { method?: string; body?: unknown; file?: File; }
+interface RequestOptions { method?: string; body?: unknown; file?: File; fileField?: string; }
 
 async function single<T>(token: string | null, path: string, options: RequestOptions): Promise<ApiResult<T>> {
   const method = options.method || (options.body || options.file ? 'POST' : 'GET');
@@ -69,7 +69,7 @@ async function single<T>(token: string | null, path: string, options: RequestOpt
   let body: BodyInit | undefined;
   if (options.file) {
     const fd = new FormData();
-    fd.append('document', options.file);
+    fd.append(options.fileField || 'document', options.file);
     if (options.body && typeof options.body === 'object') {
       Object.entries(options.body).forEach(([k, v]) => fd.append(k, String(v)));
     }
@@ -83,14 +83,14 @@ async function single<T>(token: string | null, path: string, options: RequestOpt
   let json: any = {};
   try { json = text ? JSON.parse(text) : {}; } catch { json = { message: text }; }
   if (!res.ok) {
-    return { success: false, message: json.message || `HTTP ${res.status}`, data: (json.details as T) || (null as T) };
+    return { success: false, message: json.message || `HTTP ${res.status}`, code: json.code, status: res.status, data: (json.details as T) || (null as T) };
   }
-  return { success: true, data: (json.data ?? json) as T, message: json.message };
+  return { success: true, status: res.status, data: (json.data ?? json) as T, message: json.message };
 }
 
 export async function api<T = unknown>(path: string, options: RequestOptions = {}): Promise<ApiResult<T>> {
   let attempt = await single<T>(getAccess(), path, options);
-  if (!attempt.success && attempt.message && attempt.message.toLowerCase().includes('token')) {
+  if (attempt.status === 401 && attempt.code === 'TOKEN_EXPIRED') {
     if (await tryRefresh()) {
       attempt = await single<T>(getAccess(), path, options);
     }

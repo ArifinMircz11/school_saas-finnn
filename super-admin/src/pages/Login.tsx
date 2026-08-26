@@ -1,4 +1,4 @@
-import { LoginShell } from '@shared/index';
+import { LoginShell } from '@saas/shared-ui';
 
 export default function Login() {
   return (

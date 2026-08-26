@@ -3,6 +3,7 @@ import { prisma } from '../config/database';
 import { ApiError, ok, created } from '../utils/response';
 import { ticketSchema } from '../validators';
 import { auditLog } from '../utils/audit';
+import config from '../config';
 
 // ---------- SUPPORT TICKETS ----------
 export async function createTicket(req: Request, res: Response) {
@@ -20,8 +21,12 @@ export async function listTickets(req: Request, res: Response) {
   return ok(res, tickets, 'Tickets fetched');
 }
 export async function updateTicket(req: Request, res: Response) {
-  const ticket = await prisma.supportTicket.update({ where: { id: req.params.id }, data: { status: req.body.status, priority: req.body.priority } });
-  return ok(res, ticket, 'Ticket updated');
+  const ticket = await prisma.supportTicket.findUnique({ where: { id: req.params.id } });
+  if (!ticket) throw new ApiError(404, 'Ticket not found');
+  const isSuper = req.auth?.roles.includes('SUPER_ADMIN');
+  if (!isSuper && ticket.schoolId !== req.auth?.schoolId) throw new ApiError(403, 'Forbidden: you may only update tickets in your own school');
+  const updated = await prisma.supportTicket.update({ where: { id: req.params.id }, data: { status: req.body.status, priority: req.body.priority } });
+  return ok(res, updated, 'Ticket updated');
 }
 
 // ---------- AUDIT LOGS ----------
@@ -90,5 +95,5 @@ export async function getReports(req: Request, res: Response) {
 export async function createReportExport(req: Request, res: Response) {
   // Real PDF/CSV generation would stream a document here.
   const kind = req.body.kind || 'csv';
-  return ok(res, { kind, url: `https://reports.local/${req.auth!.schoolId}/export.${kind}` }, 'Export prepared');
+  return ok(res, { kind, url: `${config.publicBaseUrl.reports}/${req.auth!.schoolId}/export.${kind}` }, 'Export prepared');
 }

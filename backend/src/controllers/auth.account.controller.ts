@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/database';
 import { ApiError, ok, created } from '../utils/response';
-import { hashPassword, generateRandomCode } from '../utils/password';
+import { hashPassword, verifyPassword, generateRandomCode } from '../utils/password';
 import { verifyAccessToken, signAccessToken } from '../utils/jwt';
 import crypto from 'crypto';
-import { registerSchema, forgotPasswordSchema, resetPasswordSchema, verifyEmailSchema } from '../validators';
+import { registerSchema, forgotPasswordSchema, resetPasswordSchema, verifyEmailSchema, changePasswordSchema } from '../validators';
 import { sendEmail } from '../services/notification.service';
 import { auditLog } from '../utils/audit';
 
@@ -53,6 +53,30 @@ export async function verifyEmail(req: Request, res: Response) {
   await prisma.user.update({ where: { email: email.toLowerCase() }, data: { emailVerified: true } });
   await prisma.emailOtp.delete({ where: { id: record.id } });
   return ok(res, null, 'Email verified');
+}
+
+/**
+ * Self-service password change for the *authenticated* user. This is the proper
+ * endpoint for "change my own password" — it intentionally does NOT go through
+ * the /users/:id admin route (which requires users.manage). Re-authenticates the
+ * caller with their current password and revokes all of their refresh tokens so
+ * existing sessions must re-login.
+ */
+export async function changePassword(req: Request, res: Response) {
+  const body = changePasswordSchema.parse(req.body);
+  const user = await prisma.user.findUnique({ where: { id: req.auth!.sub } });
+  if (!user) throw new ApiError(404, 'User not found');
+
+  const valid = await verifyPassword(body.currentPassword, user.passwordHash);
+  if (!valid) throw new ApiError(400, 'Current password is incorrect');
+
+  const passwordHash = await hashPassword(body.newPassword);
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: user.id }, data: { passwordHash } }),
+    prisma.refreshToken.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: new Date() } }),
+  ]);
+  await auditLog({ userId: user.id, schoolId: user.schoolId, ip: req.ip, action: 'CHANGE_PASSWORD', module: 'AUTH' });
+  return ok(res, null, 'Password updated. Please sign in again.');
 }
 
 export async function me(req: Request, res: Response) {

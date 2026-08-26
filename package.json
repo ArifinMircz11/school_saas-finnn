@@ -1,0 +1,28 @@
+{
+  "name": "school-saas",
+  "version": "1.0.0",
+  "private": true,
+  "description": "School SaaS monorepo: shared api-client + shared-ui packages consumed by the five dashboard apps.",
+  "workspaces": [
+    "packages/*",
+    "backend",
+    "parent",
+    "principal",
+    "school-admin",
+    "super-admin",
+    "teacher"
+  ],
+  "scripts": {
+    "dev:backend": "npm --workspace backend run dev",
+    "dev:parent": "npm --workspace parent run dev",
+    "dev:principal": "npm --workspace principal run dev",
+    "dev:school-admin": "npm --workspace school-admin run dev",
+    "dev:super-admin": "npm --workspace super-admin run dev",
+    "dev:teacher": "npm --workspace teacher run dev",
+    "build:parent": "npm --workspace parent run build",
+    "build:principal": "npm --workspace principal run build",
+    "build:school-admin": "npm --workspace school-admin run build",
+    "build:super-admin": "npm --workspace super-admin run build",
+    "build:teacher": "npm --workspace teacher run build"
+  }
+}

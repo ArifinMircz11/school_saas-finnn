@@ -1,16 +1,27 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Page, Btn, Field, api, toast } from '../services/api';
+import { Page, Btn, Field, Empty, api, toast, formats } from '../services/api';
 
 export default function Academic() {
   const qc = useQueryClient();
   const [cls, setCls] = useState('');
   const [sec, setSec] = useState<{ classId: string; name: string }>({ classId: '', name: '' });
-  const { data } = useQuery({ queryKey: ['classes'], queryFn: () => api<any[]>('/academic/classes') });
-  const classes = (data?.success ? data.data : []) || [];
+  const [ses, setSes] = useState<{ name: string; startDate: string; endDate: string }>({ name: '', startDate: '', endDate: '' });
+  const { data: classesData } = useQuery({ queryKey: ['classes'], queryFn: () => api<any[]>('/academic/classes') });
+  const classes = (classesData?.success ? classesData.data : []) || [];
+  const { data: sessionsData } = useQuery({ queryKey: ['sessions'], queryFn: () => api<any[]>('/academic/sessions') });
+  const sessions = (sessionsData?.success ? sessionsData.data : []) || [];
 
   const addClass = useMutation({ mutationFn: (n: string) => api('/academic/classes', { method: 'POST', body: { name: n } }), onSuccess: () => { toast('Class added'); setCls(''); qc.invalidateQueries({ queryKey: ['classes'] }); } });
   const addSection = useMutation({ mutationFn: (b: any) => api('/academic/sections', { method: 'POST', body: b }), onSuccess: () => { toast('Section added'); setSec({ classId: '', name: '' }); qc.invalidateQueries({ queryKey: ['classes'] }); } });
+  const addSession = useMutation({
+    mutationFn: (b: any) => api('/academic/sessions', { method: 'POST', body: b }),
+    onSuccess: () => { toast('Session created'); setSes({ name: '', startDate: '', endDate: '' }); qc.invalidateQueries({ queryKey: ['sessions'] }); },
+  });
+  const activateSession = useMutation({
+    mutationFn: (id: string) => api(`/academic/sessions/${id}/activate`, { method: 'POST' }),
+    onSuccess: () => { toast('Session activated'); qc.invalidateQueries({ queryKey: ['sessions'] }); },
+  });
 
   return (
     <Page title="Classes & Sections" subtitle="Organize academic structure">
@@ -34,6 +45,31 @@ export default function Academic() {
           </div>
         ))}
       </div>
+
+      <div className="saa-card" style={{ marginBottom: 20, maxWidth: 560, display: 'grid', gap: 12, marginTop: 24 }}>
+        <h3>Academic Sessions</h3>
+        <Field label="Name" name="sn" value={ses.name} onChange={(e) => setSes({ ...ses, name: e.target.value })} placeholder="e.g. 2025-26" />
+        <Field label="Start Date" name="sd" type="date" value={ses.startDate} onChange={(e) => setSes({ ...ses, startDate: e.target.value })} />
+        <Field label="End Date" name="ed" type="date" value={ses.endDate} onChange={(e) => setSes({ ...ses, endDate: e.target.value })} />
+        <Btn onClick={() => ses.name && ses.startDate && ses.endDate && addSession.mutate(ses)}>Create Session</Btn>
+      </div>
+      {sessions.length === 0 ? <Empty title="No sessions yet" /> : (
+        <div className="saa-card">
+          <table className="saa-table" style={{ width: '100%' }}>
+            <thead><tr><th>Name</th><th>Period</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {sessions.map((s: any) => (
+                <tr key={s.id}>
+                  <td>{s.name}</td>
+                  <td>{formats.date(s.startDate)} → {formats.date(s.endDate)}</td>
+                  <td>{s.isActive ? <b style={{ color: 'green' }}>Active</b> : 'Inactive'}</td>
+                  <td>{!s.isActive ? <Btn variant="secondary" onClick={() => activateSession.mutate(s.id)}>Activate</Btn> : null}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Page>
   );
 }

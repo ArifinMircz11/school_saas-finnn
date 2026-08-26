@@ -19,16 +19,28 @@ export async function collectFee(req: Request, res: Response) {
   });
   const newPaid = Number(studentFee.paidAmount) + Number(body.amount);
   const newStatus = newPaid >= Number(studentFee.totalAmount) - Number(studentFee.discount) ? 'PAID' : 'PARTIAL';
-  const updated = await prisma.studentFee.update({ where: { id: studentFee.id }, data: { paidAmount: newPaid, status: newStatus } });
-  await prisma.feeReceipt.create({ data: { schoolId, paymentId: payment.id, receiptNo } });
+    const updated = await prisma.studentFee.update({ where: { id: studentFee.id }, data: { paidAmount: newPaid, status: newStatus } });
   await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'COLLECT_FEE', module: 'FEES', details: { receiptNo } });
   return created(res, { payment, studentFee: updated, receiptNo }, 'Fee collected');
 }
 
 export async function studentFees(req: Request, res: Response) {
   const { studentId, status } = req.query as { studentId?: string; status?: string };
-  const where: any = { schoolId: schoolOf(req) };
+  const schoolId = schoolOf(req);
+  const where: any = { schoolId };
   if (studentId) where.studentId = studentId;
+  // STUDENT role: students (and parents using student login) see only their own
+  // fees plus siblings' fees (same guardians).
+  if (req.auth?.roles.includes('STUDENT') && !studentId) {
+    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub } });
+    if (student) {
+      const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p) => p.parentId);
+      const siblingIds = parentIds.length
+        ? (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds } }, select: { studentId: true } })).map((p) => p.studentId)
+        : [];
+      where.studentId = { in: [student.id, ...siblingIds] };
+    }
+  }
   if (status) where.status = status.toUpperCase();
   const fees = await prisma.studentFee.findMany({
     where, include: { structure: { include: { category: true } }, payments: true, student: { select: { id: true, firstName: true, lastName: true, admissionNo: true } } },
