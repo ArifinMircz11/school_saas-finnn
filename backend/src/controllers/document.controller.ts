@@ -16,7 +16,7 @@ export async function listStudentDocuments(req: Request, res: Response) {
   const where: any = { schoolId };
   if (isStudentRole && !studentId) {
     // Students see their own documents (and siblings' via shared guardians).
-    const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub } });
+    const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId } });
     if (!student) throw new ApiError(404, 'Student not found');
     const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p) => p.parentId);
     const siblingIds = parentIds.length
@@ -24,6 +24,12 @@ export async function listStudentDocuments(req: Request, res: Response) {
       : [];
     where.studentId = { in: [student.id, ...siblingIds] };
   } else if (studentId) {
+    const student = await prisma.student.findFirst({ where: { id: studentId, schoolId }, select: { id: true } });
+    if (!student) throw new ApiError(404, 'Student not found');
+    if (isStudentRole) {
+      const own = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId }, select: { id: true } });
+      if (!own || own.id !== studentId) throw new ApiError(404, 'Student not found');
+    }
     where.studentId = studentId;
   }
   const docs = await prisma.studentDocument.findMany({ where, include: { student: { select: { id: true, firstName: true, lastName: true } } }, orderBy: { createdAt: 'desc' } });
@@ -85,10 +91,18 @@ export async function listCertificates(req: Request, res: Response) {
   const { studentId } = req.query as { studentId?: string };
     const isStudentRole = req.auth?.roles.includes('STUDENT');
   const where: any = { schoolId };
-  if (studentId) where.studentId = studentId;
+  if (studentId) {
+    const target = await prisma.student.findFirst({ where: { id: studentId, schoolId }, select: { id: true } });
+    if (!target) throw new ApiError(404, 'Student not found');
+    if (isStudentRole) {
+      const own = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId }, select: { id: true } });
+      if (!own || own.id !== studentId) throw new ApiError(404, 'Student not found');
+    }
+    where.studentId = studentId;
+  }
   if (isStudentRole && !studentId) {
     // Students see their own certificates (and siblings' via shared guardians).
-    const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub } });
+    const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId } });
     if (student) {
       const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p) => p.parentId);
       const siblingIds = parentIds.length
