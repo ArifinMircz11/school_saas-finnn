@@ -81,7 +81,7 @@ export async function createParent(req: Request, res: Response) {
     include: { children: { include: { student: true } } },
   });
   await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'CREATE_PARENT', module: 'PARENTS' });
-  return ok(res, parent, 'Parent (guardian) created — parents log in with the student's credentials');
+  return ok(res, parent, "Parent (guardian) created — parents log in with the student credentials");
 }
 
 export async function listStaff(req: Request, res: Response) {
