@@ -34,20 +34,39 @@ export async function getTimetable(req: Request, res: Response) {
   const schoolId = schoolOf(req);
   const { sectionId, teacherId, day, studentId } = req.query as { sectionId?: string; teacherId?: string; day?: string; studentId?: string };
   const where: any = { schoolId };
-  if (sectionId) where.sectionId = sectionId;
-  if (teacherId) where.teacherId = teacherId;
   if (day) where.day = day;
-  if (studentId) {
-    const student = await prisma.student.findUnique({ where: { id: studentId } });
-    if (!student || student.schoolId !== schoolId) throw new ApiError(404, 'Student not found');
-    where.OR = [{ sectionId: student.sectionId }, { sectionId: student.classId }];
-    delete where.sectionId;
+  if (req.auth?.roles.includes('STUDENT')) {
+    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true, sectionId: true } });
+    if (!student) throw new ApiError(404, 'Student not found');
+    if (studentId && studentId !== student.id) throw new ApiError(404, 'Student not found');
+    if (sectionId && sectionId !== student.sectionId) throw new ApiError(404, 'Timetable not found');
+    if (teacherId) throw new ApiError(403, 'Students cannot query another teacher timetable');
+    where.sectionId = student.sectionId || '__no_section__';
+  } else if (req.auth?.roles.includes('TEACHER')) {
+    const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
+    if (!teacher) throw new ApiError(404, 'Teacher not found');
+    if (teacherId && teacherId !== teacher.id) throw new ApiError(404, 'Timetable not found');
+    where.teacherId = teacher.id;
+    if (sectionId) where.sectionId = sectionId;
+  } else {
+    if (sectionId) {
+      if (!await prisma.section.findFirst({ where: { id: sectionId, schoolId }, select: { id: true } })) throw new ApiError(404, 'Section not found');
+      where.sectionId = sectionId;
+    }
+    if (teacherId) {
+      if (!await prisma.teacher.findFirst({ where: { id: teacherId, schoolId }, select: { id: true } })) throw new ApiError(404, 'Teacher not found');
+      where.teacherId = teacherId;
+    }
+    if (studentId) {
+      const student = await prisma.student.findFirst({ where: { id: studentId, schoolId }, select: { sectionId: true } });
+      if (!student) throw new ApiError(404, 'Student not found');
+      where.sectionId = student.sectionId || '__no_section__';
+    }
   }
   const entries = await prisma.timetable.findMany({
     where, include: { section: { include: { class: true } }, subject: true, teacher: true },
     orderBy: [{ day: 'asc' }, { startTime: 'asc' }],
   });
-  // Group by day for display.
   const grouped = entries.reduce((acc: any, e) => {
     (acc[e.day] = acc[e.day] || []).push(e);
     return acc;
