@@ -14,7 +14,6 @@ import {
   findUserProfile,
   getUserPermissions,
   getUserRoles,
-  publicUser,
   revokeRefreshTokensByHash,
   updateUser,
 } from '../repositories/firestore-auth.repository';
