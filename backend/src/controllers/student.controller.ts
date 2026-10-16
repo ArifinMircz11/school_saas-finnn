@@ -53,9 +53,12 @@ export async function getStudent(req: Request, res: Response) {
 export async function createStudent(req: Request, res: Response) {
   const body = studentSchema.parse(req.body);
   const schoolId = schoolOf(req);
-  const cls = await prisma.class.findFirst({ where: { id: body.classId, schoolId } });
-  if (!cls) throw new ApiError(404, 'Class not found');
+  if (body.classId) {
+    const cls = await prisma.class.findFirst({ where: { id: body.classId, schoolId } });
+    if (!cls) throw new ApiError(404, 'Class not found');
+  }
   if (body.sectionId) {
+    if (!body.classId) throw new ApiError(400, 'A class is required when assigning a section');
     const section = await prisma.section.findFirst({ where: { id: body.sectionId, schoolId, classId: body.classId } });
     if (!section) throw new ApiError(404, 'Section not found in this class');
   }
@@ -107,15 +110,22 @@ export async function updateStudent(req: Request, res: Response) {
   const schoolId = schoolOf(req);
   const existing = await prisma.student.findUnique({ where: { id: req.params.id } });
   if (!existing || existing.schoolId !== schoolId) throw new ApiError(404, 'Student not found');
-  const cls = await prisma.class.findFirst({ where: { id: body.classId, schoolId } });
-  if (!cls) throw new ApiError(404, 'Class not found');
-  if (body.sectionId) {
-    const section = await prisma.section.findFirst({ where: { id: body.sectionId, schoolId, classId: body.classId } });
+  const targetClassId = body.classId ?? existing.classId ?? undefined;
+  const targetSectionId = body.sectionId !== undefined
+    ? body.sectionId
+    : (body.classId && body.classId !== existing.classId ? undefined : existing.sectionId ?? undefined);
+  if (targetClassId) {
+    const cls = await prisma.class.findFirst({ where: { id: targetClassId, schoolId } });
+    if (!cls) throw new ApiError(404, 'Class not found');
+  }
+  if (targetSectionId) {
+    if (!targetClassId) throw new ApiError(400, 'A class is required when assigning a section');
+    const section = await prisma.section.findFirst({ where: { id: targetSectionId, schoolId, classId: targetClassId } });
     if (!section) throw new ApiError(404, 'Section not found in this class');
   }
   const student = await prisma.student.update({
     where: { id: req.params.id },
-    data: { firstName: body.firstName, lastName: body.lastName, gender: body.gender, dob: new Date(body.dob), classId: body.classId, sectionId: body.sectionId, bloodGroup: body.bloodGroup, address: body.address, photoUrl: body.photoUrl },
+    data: { firstName: body.firstName, lastName: body.lastName, gender: body.gender, dob: new Date(body.dob), classId: targetClassId, sectionId: targetSectionId, bloodGroup: body.bloodGroup, address: body.address, photoUrl: body.photoUrl },
   });
   await auditLog({ userId: req.auth?.sub, schoolId: schoolOf(req), ip: req.ip, action: 'UPDATE_STUDENT', module: 'STUDENTS' });
   return ok(res, student, 'Student updated');
