@@ -32,6 +32,7 @@ const TENANT_RELATIONS: Record<string, Array<[field: string, model: string]>> = 
 // These are intentionally global platform data. Unknown records without a
 // resolvable tenant stop the migration instead of leaking into a global bucket.
 const GLOBAL_MODELS = new Set(['Permission', 'SubscriptionPlan', 'EmailOtp']);
+const GLOBAL_WHEN_UNSCOPED_MODELS = new Set(['AuditLog', 'SupportTicket']);
 
 function lowerFirst(value: string): string {
   return value.charAt(0).toLowerCase() + value.slice(1);
@@ -123,7 +124,17 @@ async function main() {
           data: toFirestoreValue(row) as Row,
           model,
         });
-      } else if (GLOBAL_MODELS.has(model) || (model === 'User' && row.schoolId == null)) {
+      } else if (
+        GLOBAL_MODELS.has(model) ||
+        GLOBAL_WHEN_UNSCOPED_MODELS.has(model) ||
+        (model === 'User' && row.schoolId == null) ||
+        (['UserRoleAssignment', 'UserPermission', 'RefreshToken'].includes(model) &&
+          (TENANT_RELATIONS[model] || []).some(([field, relatedModel]) => {
+            const relatedId = row[field];
+            const related = typeof relatedId === 'string' ? byModelAndId.get(`${relatedModel}:${relatedId}`) : undefined;
+            return relatedModel === 'User' && related?.schoolId == null;
+          }))
+      ) {
         planned.push({
           path: `system_${name}/${row.id}`,
           data: toFirestoreValue(row) as Row,
