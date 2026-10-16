@@ -10,7 +10,7 @@ import { uploadToStorage } from '../middleware/upload';
 export async function createHomework(req: Request, res: Response) {
   const body = homeworkSchema.parse(req.body);
   const schoolId = schoolOf(req);
-  const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth!.sub, schoolId } });
+  const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth!.sub, schoolId, deletedAt: null } });
   if (!teacher) throw new ApiError(403, 'Teacher account required');
   if (body.sectionId) {
     const section = await prisma.section.findFirst({ where: { id: body.sectionId, schoolId } });
@@ -33,14 +33,14 @@ export async function listHomework(req: Request, res: Response) {
   const where: any = { schoolId, published: true };
   let submissions: any = { include: { student: true } };
   if (req.auth?.roles.includes('STUDENT')) {
-    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true, sectionId: true } });
+    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId, deletedAt: null }, select: { id: true, sectionId: true } });
     if (!student) throw new ApiError(404, 'Student not found');
     if (sectionId && sectionId !== student.sectionId) throw new ApiError(404, 'Homework not found');
     if (student.sectionId) where.sectionId = student.sectionId;
     else where.sectionId = '__no_section__';
     submissions = { where: { studentId: student.id }, include: { student: true } };
   } else if (req.auth?.roles.includes('TEACHER')) {
-    const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
+    const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth.sub, schoolId, deletedAt: null }, select: { id: true } });
     if (!teacher) throw new ApiError(404, 'Teacher not found');
     where.teacherId = teacher.id;
     if (sectionId) {
@@ -59,7 +59,7 @@ export async function listHomework(req: Request, res: Response) {
 
 export async function submitHomework(req: Request, res: Response) {
   const schoolId = schoolOf(req);
-  const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId } });
+  const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId, deletedAt: null } });
   if (!student) throw new ApiError(403, 'Student account required');
   const hw = await prisma.homework.findFirst({ where: { id: req.params.id, schoolId } });
   if (!hw) throw new ApiError(404, 'Homework not found');
