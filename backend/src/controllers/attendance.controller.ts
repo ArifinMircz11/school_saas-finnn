@@ -24,7 +24,7 @@ export async function markAttendance(req: Request, res: Response) {
 
   if (req.auth?.roles.includes('TEACHER')) {
     const teacher = await prisma.teacher.findFirst({
-      where: { userId: req.auth.sub, schoolId, deletedAt: null },
+      where: { userId: req.auth.sub, schoolId },
       include: { sections: { select: { sectionId: true } } },
     });
     if (!teacher) throw new ApiError(403, 'Teacher account required');
