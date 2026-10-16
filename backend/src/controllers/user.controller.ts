@@ -1,266 +1,332 @@
 import { Request, Response } from 'express';
-import { prisma } from '../config/database';
+import { randomUUID } from 'node:crypto';
+import { getFirestoreInstance } from '../config/firestore';
 import { ApiError, ok, created } from '../utils/response';
 import { hashPassword } from '../utils/password';
 import { auditLog } from '../utils/audit';
 import { schoolOf } from './student.controller';
 import { createUserSchema, updateUserSchema, setUserRolesSchema, setUserPermissionsSchema } from '../validators';
 import { SUPER_ADMIN_ONLY_PERMISSIONS } from '../config/permissions';
-import crypto from 'crypto';
+import { findUserByEmail, findUserById, updateUser as updateUserDocument } from '../repositories/firestore-auth.repository';
+
+type Doc = Record<string, any>;
+
+function publicUser(user: Doc): Doc {
+  const { _docPath, ...data } = user;
+  return data;
+}
 
 const PRINCIPAL_DEFAULT_PERMISSIONS = [
   'students.view', 'teachers.view', 'attendance.view', 'results.view', 'admissions.view', 'admissions.review',
-  'fees.view', 'certificates.view', 'homework.view', 'exams.view', 'notices.view',
-  'reports.view', 'notifications.view',
+  'fees.view', 'certificates.view', 'homework.view', 'exams.view', 'notices.view', 'reports.view', 'notifications.view',
   'principal.analytics.view', 'principal.attendance.analytics.view', 'principal.academic.performance.view',
   'principal.teacher.performance.view', 'principal.admissions.approve', 'principal.results.approve',
   'principal.results.publish', 'principal.leave.approve', 'principal.certificates.approve',
   'principal.fees.overview.view', 'principal.reports.view', 'principal.approvals.manage',
 ];
-
-/** Permissions a TEACHER needs so their dashboard (attendance, marks, homework,
- *  results) has no dead ends. Granted automatically when a teacher is created. */
 export const TEACHER_DEFAULT_PERMISSIONS = [
   'students.view', 'teachers.view', 'attendance.view', 'attendance.mark', 'attendance.update',
-  'homework.view', 'homework.create', 'homework.grade', 'exams.view', 'results.view',
-  'results.enter', 'results.publish', 'timetable.view', 'notices.view', 'notifications.view',
+  'homework.view', 'homework.create', 'homework.grade', 'exams.view', 'results.view', 'results.enter',
+  'results.publish', 'timetable.view', 'notices.view', 'notifications.view',
 ];
-
-/** Permissions a STUDENT needs to view their own data without dead ends.
- *  Granted automatically when a student account is created. */
 export const STUDENT_DEFAULT_PERMISSIONS = [
-  'students.view', 'attendance.view', 'homework.view', 'exams.view',
-  'results.view', 'timetable.view', 'notices.view', 'notifications.view',
-  'documents.view', 'certificates.view',
+  'students.view', 'attendance.view', 'homework.view', 'exams.view', 'results.view', 'timetable.view',
+  'notices.view', 'notifications.view', 'documents.view', 'certificates.view',
 ];
-
-/** Permissions a SCHOOL_ADMIN needs to actually run their school dashboard.
- *  Includes 'users.manage' so a legitimately-promoted school admin can manage
- *  their own school's users (create teacher/principal/student accounts) — the
- *  route-level users.manage guard is what blocks everyone else. Deliberately
- *  excludes the SUPER_ADMIN_ONLY permissions. Granted automatically when a
- *  SCHOOL_ADMIN account is created. */
 export const SCHOOL_ADMIN_DEFAULT_PERMISSIONS = [
-  'students.view', 'students.create', 'students.update', 'students.delete',
-  'parents.view', 'parents.create', 'parents.update',
-  'teachers.view', 'teachers.create', 'teachers.update', 'teachers.delete',
-  'fees.view', 'fees.create', 'fees.collect', 'fees.refund', 'fees.assign',
-  'attendance.view', 'attendance.mark', 'attendance.update',
-  'homework.view', 'homework.create', 'homework.grade',
-  'exams.view', 'exams.create', 'results.view', 'results.enter', 'results.publish',
-  'timetable.view', 'timetable.manage',
-  'academic.manage',
-  'documents.view', 'documents.upload', 'documents.download', 'documents.verify',
-  'certificates.view', 'certificates.generate',
-  'notices.view', 'notices.create',
-  'admissions.view', 'admissions.review',
-  'users.manage',
-  'reports.view', 'reports.export',
-  'settings.manage',
-  'notifications.view', 'tickets.view', 'tickets.manage',
-  'audit.view',
-  'principal.analytics.view', 'principal.attendance.analytics.view',
-  'principal.academic.performance.view', 'principal.teacher.performance.view',
-  'principal.admissions.approve', 'principal.results.approve', 'principal.results.publish',
-  'principal.leave.approve', 'principal.certificates.approve',
-  'principal.fees.overview.view', 'principal.reports.view', 'principal.approvals.manage',
+  'students.view', 'students.create', 'students.update', 'students.delete', 'parents.view', 'parents.create',
+  'parents.update', 'teachers.view', 'teachers.create', 'teachers.update', 'teachers.delete', 'fees.view',
+  'fees.create', 'fees.collect', 'fees.refund', 'fees.assign', 'attendance.view', 'attendance.mark',
+  'attendance.update', 'homework.view', 'homework.create', 'homework.grade', 'exams.view', 'exams.create',
+  'results.view', 'results.enter', 'results.publish', 'timetable.view', 'timetable.manage', 'academic.manage',
+  'documents.view', 'documents.upload', 'documents.download', 'documents.verify', 'certificates.view',
+  'certificates.generate', 'notices.view', 'notices.create', 'admissions.view', 'admissions.review',
+  'users.manage', 'reports.view', 'reports.export', 'settings.manage', 'notifications.view', 'tickets.view',
+  'tickets.manage', 'audit.view', 'principal.analytics.view', 'principal.attendance.analytics.view',
+  'principal.academic.performance.view', 'principal.teacher.performance.view', 'principal.admissions.approve',
+  'principal.results.approve', 'principal.results.publish', 'principal.leave.approve',
+  'principal.certificates.approve', 'principal.fees.overview.view', 'principal.reports.view',
+  'principal.approvals.manage',
 ];
 
-/** Grant the standard teacher permission set to a user (idempotent). */
-async function grantTeacherDefaults(userId: string) {
-  const perms = await prisma.permission.findMany({ where: { key: { in: TEACHER_DEFAULT_PERMISSIONS } }, select: { id: true } });
-  const existing = await prisma.userPermission.findMany({ where: { userId }, select: { permissionId: true } });
-  const existingIds = new Set(existing.map((e) => e.permissionId));
-  const toCreate = perms.filter((p) => !existingIds.has(p.id)).map((p) => ({ userId, permissionId: p.id, granted: true }));
-  if (toCreate.length) await prisma.userPermission.createMany({ data: toCreate });
-  return toCreate.length;
-}
-export { grantTeacherDefaults };
-
-/** Grant the standard student permission set to a user (idempotent). */
-async function grantStudentDefaults(userId: string) {
-  const perms = await prisma.permission.findMany({ where: { key: { in: STUDENT_DEFAULT_PERMISSIONS } }, select: { id: true } });
-  const existing = await prisma.userPermission.findMany({ where: { userId }, select: { permissionId: true } });
-  const existingIds = new Set(existing.map((e) => e.permissionId));
-  const toCreate = perms.filter((p) => !existingIds.has(p.id)).map((p) => ({ userId, permissionId: p.id, granted: true }));
-  if (toCreate.length) await prisma.userPermission.createMany({ data: toCreate });
-  return toCreate.length;
-}
-export { grantStudentDefaults };
-
-/** Grant the standard school-admin permission set to a user (idempotent). */
-async function grantSchoolAdminDefaults(userId: string) {
-  const perms = await prisma.permission.findMany({ where: { key: { in: SCHOOL_ADMIN_DEFAULT_PERMISSIONS } }, select: { id: true } });
-  const existing = await prisma.userPermission.findMany({ where: { userId }, select: { permissionId: true } });
-  const existingIds = new Set(existing.map((e) => e.permissionId));
-  const toCreate = perms.filter((p) => !existingIds.has(p.id)).map((p) => ({ userId, permissionId: p.id, granted: true }));
-  if (toCreate.length) await prisma.userPermission.createMany({ data: toCreate });
-  return toCreate.length;
+function dbOrThrow() {
+  const db = getFirestoreInstance();
+  if (!db) throw new ApiError(503, 'Firestore is not configured');
+  return db;
 }
 
-/** Grant the standard principal permission set to a user (idempotent). */
-async function grantPrincipalDefaults(userId: string) {
-  const perms = await prisma.permission.findMany({ where: { key: { in: PRINCIPAL_DEFAULT_PERMISSIONS } }, select: { id: true } });
-  const existing = await prisma.userPermission.findMany({ where: { userId }, select: { permissionId: true } });
-  const existingIds = new Set(existing.map((e) => e.permissionId));
-  const toCreate = perms.filter((p) => !existingIds.has(p.id)).map((p) => ({ userId, permissionId: p.id, granted: true }));
-  if (toCreate.length) await prisma.userPermission.createMany({ data: toCreate });
+function collectionFor(schoolId: string | null | undefined, name: string) {
+  const db = dbOrThrow();
+  return schoolId
+    ? db.collection('schools').doc(schoolId).collection(name)
+    : db.collection(`system_${name}`);
+}
+
+function toDoc(snapshot: any): Doc {
+  return { ...snapshot.data(), id: snapshot.id, _docPath: snapshot.ref.path };
+}
+
+async function rowsForUser(collectionName: string, userId: string): Promise<Doc[]> {
+  const db = dbOrThrow();
+  const [tenant, system] = await Promise.all([
+    db.collectionGroup(collectionName).where('userId', '==', userId).get(),
+    db.collection(`system_${collectionName}`).where('userId', '==', userId).get(),
+  ]);
+  return [...tenant.docs, ...system.docs].map(toDoc);
+}
+
+async function permissionDocuments(keys?: string[]): Promise<Doc[]> {
+  const snapshot = await dbOrThrow().collection('system_permissions').get();
+  let rows = snapshot.docs.map(toDoc);
+  if (keys) rows = rows.filter((row) => keys.includes(row.key));
+  return rows;
+}
+
+async function grantDefaults(userId: string, keys: string[]) {
+  const user = await findUserById(userId);
+  if (!user) return 0;
+  const [permissions, existing] = await Promise.all([
+    permissionDocuments(keys),
+    rowsForUser('userPermissions', userId),
+  ]);
+  const existingIds = new Set(existing.map((row) => row.permissionId));
+  const missing = permissions.filter((permission) => !existingIds.has(permission.id));
+  const db = dbOrThrow();
+  for (let start = 0; start < missing.length; start += 450) {
+    const batch = db.batch();
+    missing.slice(start, start + 450).forEach((permission) => {
+      const id = randomUUID();
+      batch.create(collectionFor(user.schoolId, 'userPermissions').doc(id), {
+        id, userId, permissionId: permission.id, granted: true,
+      });
+    });
+    await batch.commit();
+  }
+  return missing.length;
+}
+
+export async function grantTeacherDefaults(userId: string) {
+  return grantDefaults(userId, TEACHER_DEFAULT_PERMISSIONS);
+}
+export async function grantStudentDefaults(userId: string) {
+  return grantDefaults(userId, STUDENT_DEFAULT_PERMISSIONS);
+}
+export async function grantSchoolAdminDefaults(userId: string) {
+  return grantDefaults(userId, SCHOOL_ADMIN_DEFAULT_PERMISSIONS);
+}
+export async function grantPrincipalDefaults(userId: string) {
+  return grantDefaults(userId, PRINCIPAL_DEFAULT_PERMISSIONS);
+}
+
+async function accessData(userId: string) {
+  const [roles, permissionRows] = await Promise.all([
+    roleRows(userId),
+    rowsForUser('userPermissions', userId),
+  ]);
+  const granted = permissionRows.filter((row) => row.granted === true);
+  const allPermissions = await permissionDocuments();
+  const permissionById = new Map(allPermissions.map((permission) => [permission.id, permission]));
+  const permissions = granted.map((row) => {
+    const { _docPath, ...data } = row;
+    const permission = permissionById.get(row.permissionId);
+    return permission ? { ...data, permission: { key: permission.key } } : null;
+  }).filter((row) => row !== null);
+  return {
+    roles: roles.map(({ _docPath, ...role }) => role),
+    permissions,
+  };
+}
+
+async function usersInScope(schoolId?: string | null): Promise<Doc[]> {
+  const db = dbOrThrow();
+  if (typeof schoolId === 'string') {
+    const snapshot = await db.collection('schools').doc(schoolId).collection('users').get();
+    return snapshot.docs.map(toDoc);
+  }
+  if (schoolId === null) {
+    const snapshot = await db.collection('system_users').get();
+    return snapshot.docs.map(toDoc);
+  }
+  const [tenant, system] = await Promise.all([
+    db.collectionGroup('users').get(),
+    db.collection('system_users').get(),
+  ]);
+  return [...tenant.docs, ...system.docs].map(toDoc);
+}
+
+async function roleRows(userId: string): Promise<Doc[]> {
+  return rowsForUser('userRoleAssignments', userId);
+}
+
+async function replaceUserRoles(user: Doc, roles: string[], assignedBy: string) {
+  const db = dbOrThrow();
+  const existing = await roleRows(user.id);
+  if (!existing.length && !roles.length) return;
+  const batch = db.batch();
+  existing.forEach((row) => row._docPath && batch.delete(db.doc(row._docPath)));
+  roles.forEach((role) => {
+    const id = randomUUID();
+    batch.create(collectionFor(user.schoolId, 'userRoleAssignments').doc(id), { id, userId: user.id, role, assignedBy });
+  });
+  await batch.commit();
+}
+
+async function replaceUserPermissions(user: Doc, keys: string[]) {
+  const db = dbOrThrow();
+  const [existing, permissions] = await Promise.all([
+    rowsForUser('userPermissions', user.id),
+    permissionDocuments(keys),
+  ]);
+  if (!existing.length && !permissions.length) return;
+  const batch = db.batch();
+  existing.forEach((row) => row._docPath && batch.delete(db.doc(row._docPath)));
+  permissions.forEach((permission) => {
+    const id = randomUUID();
+    batch.create(collectionFor(user.schoolId, 'userPermissions').doc(id), {
+      id, userId: user.id, permissionId: permission.id, granted: true,
+    });
+  });
+  await batch.commit();
+}
+
+async function getPrincipalProfile(schoolId: string, userId: string) {
+  const snapshot = await collectionFor(schoolId, 'principalProfiles').where('userId', '==', userId).limit(1).get();
+  return snapshot.empty ? null : toDoc(snapshot.docs[0]);
 }
 
 export async function listUsers(req: Request, res: Response) {
   const isSuper = req.auth?.roles.includes('SUPER_ADMIN');
-  const where: any = { deletedAt: null };
-  if (!isSuper) where.schoolId = req.auth!.schoolId ?? null;
-  else if (req.query.schoolId) where.schoolId = req.query.schoolId as string;
+  const scopedSchoolId = isSuper ? (req.query.schoolId as string | undefined) : (req.auth!.schoolId ?? null);
+  let users = await usersInScope(scopedSchoolId);
+  users = users.filter((user) => user.deletedAt == null);
   if (req.query.q) {
-    where.OR = [
-      { email: { contains: req.query.q as string, mode: 'insensitive' } },
-      { firstName: { contains: req.query.q as string, mode: 'insensitive' } },
-      { lastName: { contains: req.query.q as string, mode: 'insensitive' } },
-    ];
+    const query = String(req.query.q).toLowerCase();
+    users = users.filter((user) => [user.email, user.firstName, user.lastName].some((value) => String(value || '').toLowerCase().includes(query)));
   }
-  const users = await prisma.user.findMany({
-    where,
-    include: { roles: true, permissions: { include: { permission: { select: { key: true } } } } },
-    orderBy: { createdAt: 'desc' },
+  users.sort((a, b) => {
+    const aDate = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : new Date(a.createdAt).getTime();
+    const bDate = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : new Date(b.createdAt).getTime();
+    return bDate - aDate;
   });
-  return ok(res, users, 'Users fetched');
+  const result = await Promise.all(users.map(async (user) => ({
+    ...publicUser(user),
+    ...(await accessData(user.id)),
+  })));
+  return ok(res, result, 'Users fetched');
 }
 
 export async function createUser(req: Request, res: Response) {
   const body = createUserSchema.parse(req.body);
   const isSuper = req.auth?.roles.includes('SUPER_ADMIN');
-
   const roles: string[] = Array.isArray(body.roles) && body.roles.length ? body.roles : ['STAFF'];
   const permissionKeys: string[] = Array.isArray(body.permissionKeys) ? body.permissionKeys : [];
-
-  // Escalation guards: only a SUPER_ADMIN may create another SUPER_ADMIN, and
-  // only a SUPER_ADMIN may grant platform-level permissions.
-  if (!isSuper && roles.includes('SUPER_ADMIN')) {
-    throw new ApiError(403, 'Only a SUPER_ADMIN can assign the SUPER_ADMIN role');
-  }
-  if (!isSuper && permissionKeys.some((k) => SUPER_ADMIN_ONLY_PERMISSIONS.includes(k))) {
+  if (!isSuper && roles.includes('SUPER_ADMIN')) throw new ApiError(403, 'Only a SUPER_ADMIN can assign the SUPER_ADMIN role');
+  if (!isSuper && permissionKeys.some((key) => SUPER_ADMIN_ONLY_PERMISSIONS.includes(key))) {
     throw new ApiError(403, 'Forbidden: only a SUPER_ADMIN may grant platform-level permissions');
   }
 
-  const existing = await prisma.user.findUnique({ where: { email: body.email.toLowerCase() } });
-  if (existing) throw new ApiError(409, 'User already exists');
+  const email = body.email.toLowerCase();
+  if (await findUserByEmail(email)) throw new ApiError(409, 'User already exists');
   const passwordHash = await hashPassword(body.password);
-
-  // Tenant: school users may only create accounts within their own school.
   const schoolId = isSuper ? (body.schoolId || null) : (req.auth?.schoolId ?? null);
-  const user = await prisma.user.create({
-    data: {
-      schoolId,
-      email: body.email.toLowerCase(), firstName: body.firstName, lastName: body.lastName ?? '',
-      phone: body.phone, passwordHash, emailVerified: true,
-      roles: { create: roles.map((role: string) => ({ role: role as any })) },
-      permissions: permissionKeys.length
-        ? { create: (await prisma.permission.findMany({ where: { key: { in: permissionKeys } }, select: { id: true } })).map((p) => ({ permissionId: p.id, granted: true })) }
-        : undefined,
-    },
-  });
-  if (roles.includes('PRINCIPAL') && user.schoolId) {
-    await prisma.principalProfile.create({ data: { schoolId: user.schoolId, userId: user.id, title: body.title } });
-    await grantPrincipalDefaults(user.id);
+  const id = randomUUID();
+  const user: Doc = {
+    id, schoolId, email, firstName: body.firstName, lastName: body.lastName ?? '',
+    phone: body.phone ?? null, passwordHash, emailVerified: true, isActive: true,
+    avatarUrl: null, lastLoginAt: null, deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+  };
+  await collectionFor(schoolId, 'users').doc(id).create(user);
+  const persistedUser = { ...user, _docPath: schoolId ? `schools/${schoolId}/users/${id}` : `system_users/${id}` };
+  await replaceUserRoles(persistedUser, roles, req.auth!.sub);
+  if (permissionKeys.length) await replaceUserPermissions(persistedUser, permissionKeys);
+  if (roles.includes('PRINCIPAL') && schoolId) {
+    const profileId = randomUUID();
+    await collectionFor(schoolId, 'principalProfiles').doc(profileId).create({
+      id: profileId, schoolId, userId: id, title: body.title ?? null, createdAt: new Date(),
+    });
+    await grantPrincipalDefaults(id);
   }
-  if (roles.includes('TEACHER')) await grantTeacherDefaults(user.id);
-  if (roles.includes('STUDENT')) await grantStudentDefaults(user.id);
-  if (roles.includes('SCHOOL_ADMIN')) await grantSchoolAdminDefaults(user.id);
-  await auditLog({ userId: req.auth?.sub, schoolId: req.auth?.schoolId, ip: req.ip, action: 'CREATE_USER', module: 'USERS', details: { id: user.id, roles } });
-  return created(res, { id: user.id, email: user.email }, 'User created');
+  if (roles.includes('TEACHER')) await grantTeacherDefaults(id);
+  if (roles.includes('STUDENT')) await grantStudentDefaults(id);
+  if (roles.includes('SCHOOL_ADMIN')) await grantSchoolAdminDefaults(id);
+  await auditLog({ userId: req.auth?.sub, schoolId: req.auth?.schoolId, ip: req.ip, action: 'CREATE_USER', module: 'USERS', details: { id, roles } });
+  return created(res, { id, email }, 'User created');
 }
 
 export async function updateUser(req: Request, res: Response) {
   const body = updateUserSchema.parse(req.body);
-  // Tenant guard: a school user may only modify accounts that belong to their school.
   const isSuper = req.auth?.roles.includes('SUPER_ADMIN');
-  const target = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true, schoolId: true } });
+  const target = await findUserById(req.params.id);
   if (!target) throw new ApiError(404, 'User not found');
   if (!isSuper && target.schoolId !== req.auth?.schoolId) throw new ApiError(403, 'Forbidden: you may only manage users in your own school');
-  const data: any = {};
+  const data: Doc = {};
   if (body.firstName) data.firstName = body.firstName;
   if (body.lastName) data.lastName = body.lastName;
   if (body.phone) data.phone = body.phone;
   if (typeof body.isActive === 'boolean') data.isActive = body.isActive;
   if (body.password) data.passwordHash = await hashPassword(body.password);
-  const user = await prisma.user.update({ where: { id: req.params.id }, data });
-  await auditLog({ userId: req.auth?.sub, schoolId: user.schoolId, ip: req.ip, action: 'UPDATE_USER', module: 'USERS' });
-  return ok(res, { id: user.id }, 'User updated');
+  data.updatedAt = new Date();
+  await updateUserDocument(target, data);
+  await auditLog({ userId: req.auth?.sub, schoolId: target.schoolId ?? null, ip: req.ip, action: 'UPDATE_USER', module: 'USERS' });
+  return ok(res, { id: target.id }, 'User updated');
 }
 
 export async function setUserRoles(req: Request, res: Response) {
   const { roles } = setUserRolesSchema.parse(req.body);
   const isSuper = req.auth?.roles.includes('SUPER_ADMIN');
-  // Escalation guard: only a SUPER_ADMIN can assign the SUPER_ADMIN role.
-  if (!isSuper && roles.includes('SUPER_ADMIN')) {
-    throw new ApiError(403, 'Only a SUPER_ADMIN can assign the SUPER_ADMIN role');
-  }
-  // Tenant isolation.
-  const target = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true, schoolId: true } });
+  if (!isSuper && roles.includes('SUPER_ADMIN')) throw new ApiError(403, 'Only a SUPER_ADMIN can assign the SUPER_ADMIN role');
+  const target = await findUserById(req.params.id);
   if (!target) throw new ApiError(404, 'User not found');
   if (!isSuper && target.schoolId !== req.auth?.schoolId) throw new ApiError(403, 'Forbidden: you may only manage users in your own school');
-  await prisma.$transaction(async (tx) => {
-    await tx.userRoleAssignment.deleteMany({ where: { userId: req.params.id } });
-    if (roles.length) {
-      await tx.userRoleAssignment.createMany({ data: roles.map((role) => ({ userId: req.params.id, role: role as any, assignedBy: req.auth!.sub })) });
+  await replaceUserRoles(target, roles, req.auth!.sub);
+  if (roles.includes('PRINCIPAL') && target.schoolId) {
+    const existing = await getPrincipalProfile(target.schoolId, target.id);
+    if (!existing) {
+      const id = randomUUID();
+      await collectionFor(target.schoolId, 'principalProfiles').doc(id).create({ id, schoolId: target.schoolId, userId: target.id, createdAt: new Date() });
     }
-  });
-  // keep a principal profile (and default grants) in sync when the role is granted
-  if (roles.includes('PRINCIPAL')) {
-    const u = await prisma.user.findUnique({ where: { id: req.params.id }, select: { schoolId: true, principal: true } });
-    if (u?.schoolId && !u.principal) {
-      await prisma.principalProfile.create({ data: { schoolId: u.schoolId, userId: req.params.id } });
-    }
-    await grantPrincipalDefaults(req.params.id);
+    await grantPrincipalDefaults(target.id);
   }
-  if (roles.includes('SCHOOL_ADMIN')) await grantSchoolAdminDefaults(req.params.id);
-  if (roles.includes('TEACHER')) await grantTeacherDefaults(req.params.id);
-  if (roles.includes('STUDENT')) await grantStudentDefaults(req.params.id);
+  if (roles.includes('SCHOOL_ADMIN')) await grantSchoolAdminDefaults(target.id);
+  if (roles.includes('TEACHER')) await grantTeacherDefaults(target.id);
+  if (roles.includes('STUDENT')) await grantStudentDefaults(target.id);
   await auditLog({ userId: req.auth?.sub, schoolId: req.auth?.schoolId, ip: req.ip, action: 'SET_USER_ROLES', module: 'USERS', details: { roles } });
   return ok(res, null, 'Roles updated');
 }
 
-// ---------- PERMISSIONS ----------
 export async function listPermissions(req: Request, res: Response) {
-  const perms = await prisma.permission.findMany({ orderBy: { key: 'asc' } });
-  return ok(res, perms, 'Permissions fetched');
+  const permissions = await permissionDocuments();
+  permissions.sort((a, b) => String(a.key).localeCompare(String(b.key)));
+  return ok(res, permissions.map(({ _docPath, ...permission }) => permission), 'Permissions fetched');
 }
 
 export async function setUserPermissions(req: Request, res: Response) {
   const { permissionKeys } = setUserPermissionsSchema.parse(req.body);
   const isSuper = req.auth?.roles.includes('SUPER_ADMIN');
-  // Escalation guard: only a SUPER_ADMIN may grant platform-level permissions.
-  if (!isSuper && permissionKeys.some((k) => SUPER_ADMIN_ONLY_PERMISSIONS.includes(k))) {
+  if (!isSuper && permissionKeys.some((key) => SUPER_ADMIN_ONLY_PERMISSIONS.includes(key))) {
     throw new ApiError(403, 'Forbidden: only a SUPER_ADMIN may grant platform-level permissions');
   }
-  const target = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true, schoolId: true } });
+  const target = await findUserById(req.params.id);
   if (!target) throw new ApiError(404, 'User not found');
   if (!isSuper && target.schoolId !== req.auth?.schoolId) throw new ApiError(403, 'Forbidden: you may only manage users in your own school');
-  const perms = await prisma.permission.findMany({ where: { key: { in: permissionKeys } }, select: { id: true } });
-  await prisma.$transaction(async (tx) => {
-    await tx.userPermission.deleteMany({ where: { userId: req.params.id } });
-    if (perms.length) {
-      await tx.userPermission.createMany({
-        data: perms.map((p) => ({ userId: req.params.id, permissionId: p.id, granted: true })),
-      });
-    }
-  });
+  await replaceUserPermissions(target, permissionKeys);
   await auditLog({ userId: req.auth?.sub, schoolId: req.auth?.schoolId, ip: req.ip, action: 'SET_PERMISSIONS', module: 'USERS' });
   return ok(res, null, 'Permissions updated');
 }
 
-/** Seed the Permission table with the central catalog. */
+/** Seed the platform permission catalog in Firestore. */
 export async function seedPermissions(req: Request, res: Response) {
   if (!req.auth?.roles.includes('SUPER_ADMIN')) throw new ApiError(403, 'Forbidden');
   const { ALL_PERMISSIONS } = await import('../config/permissions');
+  const existing = await permissionDocuments();
+  const keys = new Set(existing.map((permission) => permission.key));
+  const db = dbOrThrow();
   let count = 0;
   for (const key of ALL_PERMISSIONS) {
-    const existing = await prisma.permission.findUnique({ where: { key } });
-    if (!existing) {
-      await prisma.permission.create({ data: { key } });
-      count++;
-    }
+    if (keys.has(key)) continue;
+    const id = randomUUID();
+    await db.collection('system_permissions').doc(id).create({ id, key, description: null });
+    count++;
   }
   return ok(res, { created: count }, 'Permissions seeded');
 }

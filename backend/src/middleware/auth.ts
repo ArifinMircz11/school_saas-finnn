@@ -1,5 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
-import { prisma } from '../config/database';
+import { findUserById } from '../repositories/firestore-auth.repository';
 import { ApiError } from '../utils/response';
 import { verifyAccessToken, AccessPayload } from '../utils/jwt';
 
@@ -44,10 +44,7 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
     }
 
     // Confirm the user still exists and is active (so deactivated users lose access).
-    const user = await prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: { id: true, isActive: true, deletedAt: true },
-    });
+    const user = await findUserById(payload.sub);
     if (!user || !user.isActive || user.deletedAt) {
       throw new ApiError(401, 'Account inactive or deleted', undefined, 'ACCOUNT_INACTIVE');
     }

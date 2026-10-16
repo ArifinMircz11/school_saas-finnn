@@ -7,7 +7,6 @@ import router from './routes';
 import { errorHandler, notFound } from './utils/response';
 import { apiLimiter } from './middleware/rateLimiter';
 import { requireAuth, requireRole } from './middleware/auth';
-import { prisma } from './config/database';
 
 export const app = express();
 
@@ -41,22 +40,14 @@ app.use('/api', apiLimiter);
 
 // Readiness: confirms that the primary operational database is reachable.
 app.get('/api/health/ready', async (_req: Request, res: Response) => {
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    res.status(200).json({
-      success: true,
-      status: 'ready',
-      dependencies: { postgresql: 'ok' },
-      timestamp: new Date().toISOString(),
-    });
-  } catch {
-    res.status(503).json({
-      success: false,
-      status: 'not_ready',
-      dependencies: { postgresql: 'unavailable' },
-      timestamp: new Date().toISOString(),
-    });
-  }
+  const { testFirestoreConnection } = await import('./config/firestore');
+  const result = await testFirestoreConnection();
+  res.status(result.success ? 200 : 503).json({
+    success: result.success,
+    status: result.success ? 'ready' : 'not_ready',
+    dependencies: { firestore: result.success ? 'ok' : 'unavailable' },
+    timestamp: new Date().toISOString(),
+  });
 });
 
 app.get('/api/firestore-health', requireAuth, requireRole('SUPER_ADMIN'), async (_req: Request, res: Response) => {
