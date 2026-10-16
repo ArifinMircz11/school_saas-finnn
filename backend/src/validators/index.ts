@@ -182,8 +182,8 @@ export const timetableSchema = z.object({
   subjectId: z.string().min(1),
   teacherId: z.string().min(1),
   day: z.string().min(1),
-  startTime: z.string().min(1),
-  endTime: z.string().min(1),
+  startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Time must use 24-hour HH:mm format'),
+  endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Time must use 24-hour HH:mm format'),
 });
 export const noticeSchema = z.object({
   title: z.string().min(1),
