@@ -4,7 +4,7 @@
 
 The source of truth today is PostgreSQL accessed through Prisma. The target is the configured named Cloud Firestore database. This migration runner copies records; it never deletes or mutates the PostgreSQL source.
 
-**This script migrates data only. It does not switch API controllers to Firestore. Do not cut over production traffic until the Firestore repository implementation for every API domain has replaced Prisma calls and the API integration suite passes.**
+**The migration runner copies data only. The API controllers on this branch have been switched to Firestore, but this does not mean the PostgreSQL data has been copied or production traffic has been cut over.**
 
 ## Target document layout
 
@@ -54,8 +54,8 @@ The code change is **not yet a verified production cutover**. No live data migra
 - Dry run reports all source records accounted for and zero unresolved tenant records.
 - Apply completes with no failed batches.
 - Verify source and target counts per model, representative relation IDs, tenant separation, and financial decimal values.
-- Implement Firestore repositories and migrate all API controllers/services off Prisma.
-- Update readiness health checks to Firestore and add HTTP integration tests for all five dashboards.
+- Confirm runtime API code has no PostgreSQL/Prisma dependency; Prisma should remain only for source migration and legacy seed/schema tooling.
+- Run HTTP integration tests for all five dashboards and critical create/update/review/payment/auth workflows against the configured Firestore database.
 - Only then deploy the database cutover; retain PostgreSQL until rollback criteria are met.
 
 The configured database identifier is sourced from `FIRESTORE_DATABASE_ID` and the checked-in applet configuration. The script never silently falls back to the default Firestore database.
