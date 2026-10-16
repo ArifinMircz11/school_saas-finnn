@@ -1,0 +1,6 @@
+{
+  "name": "School Management SaaS",
+  "description": "Multi-tenant school management platform with role-based dashboards for Super Admin, School Admin, Principal, Teacher, and Student/Parent.",
+  "permissions": [],
+  "capabilities": []
+}

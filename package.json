@@ -13,6 +13,9 @@
     "teacher"
   ],
   "scripts": {
+    "build": "npm --workspace backend run build && npm --workspace school-admin run build && npm --workspace principal run build && npm --workspace teacher run build && npm --workspace parent run build && npm --workspace super-admin run build",
+    "dev": "npm --workspace backend run dev",
+    "start": "npm --workspace backend start",
     "dev:backend": "npm --workspace backend run dev",
     "dev:parent": "npm --workspace parent run dev",
     "dev:principal": "npm --workspace principal run dev",
@@ -24,5 +27,8 @@
     "build:school-admin": "npm --workspace school-admin run build",
     "build:super-admin": "npm --workspace super-admin run build",
     "build:teacher": "npm --workspace teacher run build"
+  },
+  "dependencies": {
+    "firebase-admin": "^14.5.0"
   }
 }

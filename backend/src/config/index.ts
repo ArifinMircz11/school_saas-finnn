@@ -3,9 +3,9 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 export const config = {
-  port: Number(process.env.PORT || 5000),
+  port: Number(process.env.PORT || 3000),
   nodeEnv: process.env.NODE_ENV || 'development',
-  clientUrls: (process.env.CLIENT_URLS || 'http://localhost:5173').split(',').map((u) => u.trim()),
+  clientUrls: (process.env.CLIENT_URLS || 'http://localhost:3000,http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176,http://localhost:5178').split(',').map((u) => u.trim()),
   databaseUrl: process.env.DATABASE_URL || '',
   jwt: {
     accessSecret: process.env.JWT_ACCESS_SECRET || 'dev-access-secret',

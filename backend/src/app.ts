@@ -33,6 +33,12 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.status(200).json({ success: true, status: 'ok', timestamp: new Date().toISOString() });
 });
 
+app.get('/api/firestore-health', async (_req: Request, res: Response) => {
+  const { testFirestoreConnection } = await import('./config/firestore');
+  const result = await testFirestoreConnection();
+  res.status(result.success ? 200 : 500).json(result);
+});
+
 app.use('/api', apiLimiter);
 app.use('/api', router);
 app.use(notFound);
