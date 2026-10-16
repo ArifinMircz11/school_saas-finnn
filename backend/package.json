@@ -12,7 +12,9 @@
     "prisma:migrate": "prisma migrate dev",
     "seed": "tsx prisma/seed.ts",
     "test:firestore": "tsx src/tests/firestore-integration.test.ts",
-    "test:security": "tsx src/tests/cross-tenant-security.test.ts"
+    "test:security": "tsx src/tests/cross-tenant-security.test.ts",
+    "migrate:firestore:dry-run": "tsx src/scripts/migrate-postgres-to-firestore.ts",
+    "migrate:firestore": "tsx src/scripts/migrate-postgres-to-firestore.ts --apply"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
