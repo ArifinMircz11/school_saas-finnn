@@ -11,7 +11,8 @@
     "prisma:push": "prisma db push",
     "prisma:migrate": "prisma migrate dev",
     "seed": "tsx prisma/seed.ts",
-    "test:firestore": "tsx src/tests/firestore-integration.test.ts"
+    "test:firestore": "tsx src/tests/firestore-integration.test.ts",
+    "test:security": "tsx src/tests/cross-tenant-security.test.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
