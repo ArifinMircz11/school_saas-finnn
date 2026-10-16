@@ -24,6 +24,11 @@ const firebaseConfig = loadFirebaseConfig();
 const projectId = process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId;
 const databaseId = process.env.FIRESTORE_DATABASE_ID || firebaseConfig.firestoreDatabaseId;
 
+/** Exposes the selected database identifier for deterministic configuration tests. */
+export function getConfiguredFirestoreDatabaseId(): string | null {
+  return databaseId || null;
+}
+
 export function getFirestoreInstance() {
   if (!projectId || !databaseId) {
     console.warn('Firestore is not configured: FIREBASE_PROJECT_ID and FIRESTORE_DATABASE_ID are required.');

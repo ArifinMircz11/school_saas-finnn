@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, RequestHandler } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
@@ -7,6 +7,7 @@ import router from './routes';
 import { errorHandler, notFound } from './utils/response';
 import { apiLimiter } from './middleware/rateLimiter';
 import { requireAuth, requireRole } from './middleware/auth';
+import { prisma } from './config/database';
 
 export const app = express();
 
@@ -26,16 +27,37 @@ app.use(cors({
   credentials: true,
 }));
 
-app.use(compression() as any);
+app.use(compression() as unknown as RequestHandler);
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
+// Liveness: confirms that the HTTP process is responding.
 app.get('/api/health', (_req: Request, res: Response) => {
   res.status(200).json({ success: true, status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // Apply API rate limiting before every API endpoint, including health diagnostics.
 app.use('/api', apiLimiter);
+
+// Readiness: confirms that the primary operational database is reachable.
+app.get('/api/health/ready', async (_req: Request, res: Response) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.status(200).json({
+      success: true,
+      status: 'ready',
+      dependencies: { postgresql: 'ok' },
+      timestamp: new Date().toISOString(),
+    });
+  } catch {
+    res.status(503).json({
+      success: false,
+      status: 'not_ready',
+      dependencies: { postgresql: 'unavailable' },
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
 
 app.get('/api/firestore-health', requireAuth, requireRole('SUPER_ADMIN'), async (_req: Request, res: Response) => {
   const { testFirestoreConnection } = await import('./config/firestore');

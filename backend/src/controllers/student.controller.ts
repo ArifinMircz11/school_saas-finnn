@@ -8,7 +8,12 @@ import { grantStudentDefaults } from './user.controller';
 import crypto from 'crypto';
 
 export function schoolOf(req: Request): string {
-  return req.auth?.schoolId!;
+  const schoolId = req.auth?.schoolId;
+  if (!req.auth) throw new ApiError(401, 'Authentication required');
+  if (typeof schoolId !== 'string' || schoolId.trim().length === 0) {
+    throw new ApiError(403, 'School context required for this operation');
+  }
+  return schoolId;
 }
 
 // ---------- STUDENTS ----------
@@ -45,16 +50,16 @@ export async function createStudent(req: Request, res: Response) {
   if (school && studentCount >= school.maxStudents) throw new ApiError(400, 'Student limit reached for this school');
 
   const admissionNo = generateAdmissionNo();
-    // Every student gets a UNIQUE login (even siblings). Parents log in with
+  // Every student gets a UNIQUE login (even siblings). Parents log in with
   // the student's credentials — no shared family account.
   const password = body.password || crypto.randomBytes(16).toString('base64').slice(0, 12);
   const passwordHash = await hashPassword(password);
-    // Unique email per student (siblings never share). Uses admission number by default,
+  // Unique email per student (siblings never share). Uses admission number by default,
   // or the student's own email if explicitly provided.
   const studentEmail = body.email && !body.parentEmail
     ? body.email.toLowerCase()
     : `${admissionNo.toLowerCase()}@student.${schoolId}.local`;
-      const student = await prisma.$transaction(async (tx) => {
+  const student = await prisma.$transaction(async (tx) => {
     let user = await tx.user.findUnique({ where: { email: studentEmail } });
     if (!user) {
       user = await tx.user.create({
