@@ -33,8 +33,28 @@ permissions:
 
 jobs:
   build-existing-app:
-    name: Build existing PostgreSQL/Prisma app and dashboards
+    name: Build and PostgreSQL runtime smoke test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: school_saas
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d school_saas"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/school_saas?schema=public
+      NODE_ENV: test
+      PORT: 3000
+      JWT_ACCESS_SECRET: ci-access-secret-please-change
+      JWT_REFRESH_SECRET: ci-refresh-secret-please-change
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,6 +68,31 @@ jobs:
         run: npm --workspace backend run prisma:generate
       - name: Build backend and all dashboards
         run: npm run build
+      - name: Prepare ephemeral PostgreSQL schema
+        run: npm --workspace backend run prisma:push
+      - name: Start backend and verify liveness/readiness
+        shell: bash
+        run: |
+          node backend/dist/index.js > /tmp/school-saas-backend.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:3000/api/health >/dev/null; then
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat /tmp/school-saas-backend.log
+              exit 1
+            fi
+            sleep 2
+          done
+
+          curl --silent --show-error --fail http://127.0.0.1:3000/api/health
+          curl --silent --show-error --fail http://127.0.0.1:3000/api/health/ready
 
   build-firebase-next:
     name: Build isolated Firebase/Firestore service
