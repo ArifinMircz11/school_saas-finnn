@@ -34,13 +34,15 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.status(200).json({ success: true, status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Apply API rate limiting before every API endpoint, including health diagnostics.
+app.use('/api', apiLimiter);
+
 app.get('/api/firestore-health', requireAuth, requireRole('SUPER_ADMIN'), async (_req: Request, res: Response) => {
   const { testFirestoreConnection } = await import('./config/firestore');
   const result = await testFirestoreConnection();
-  res.status(result.success ? 200 : 500).json(result);
+  res.status(result.success ? 200 : 503).json(result);
 });
 
-app.use('/api', apiLimiter);
 app.use('/api', router);
 app.use(notFound);
 app.use(errorHandler);
