@@ -69,9 +69,12 @@ export async function createSession(req: Request, res: Response) {
   });
   if (body.isActive) {
     const active = await collection(schoolId, 'academicSessions').where('isActive', '==', true).get();
-    const batch = dbOrThrow().batch();
-    active.docs.filter((doc) => doc.id !== session.id).forEach((doc) => batch.update(doc.ref, { isActive: false }));
-    if (!active.empty) await batch.commit();
+    const previous = active.docs.filter((doc) => doc.id !== session.id);
+    if (previous.length) {
+      const batch = dbOrThrow().batch();
+      previous.forEach((doc) => batch.update(doc.ref, { isActive: false }));
+      await batch.commit();
+    }
   }
   await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'CREATE_SESSION', module: 'ACADEMIC' });
   return created(res, session, 'Session created');
@@ -122,9 +125,10 @@ export async function createSection(req: Request, res: Response) {
   const body = sectionSchema.parse(req.body);
   const cls = await findDoc(schoolId, 'classes', body.classId);
   if (!cls) throw new ApiError(403, 'Tenant mismatch');
-  const existing = await collection(schoolId, 'sections')
-    .where('classId', '==', body.classId).where('name', '==', body.name).limit(1).get();
-  if (!existing.empty) throw new ApiError(409, 'Section name already exists in this class');
+  const existingSections = await listDocs(schoolId, 'sections', 'classId', body.classId);
+  if (existingSections.some((section) => section.name === body.name)) {
+    throw new ApiError(409, 'Section name already exists in this class');
+  }
   const section = await createDoc(schoolId, 'sections', {
     classId: body.classId,
     name: body.name,
