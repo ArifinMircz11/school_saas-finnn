@@ -76,7 +76,7 @@ export async function getDashboard(req: Request, res: Response) {
 
     // Guardians of this student (data-only records — no login accounts).
     const guardians = student
-      ? (await prisma.studentParent.findMany({ where: { studentId: student.id }, include: { parent: true } })).map((g) => ({
+      ? (await prisma.studentParent.findMany({ where: { studentId: student.id, parent: { schoolId } }, include: { parent: true } })).map((g) => ({
           id: g.parent.id,
           firstName: g.parent.firstName,
           lastName: g.parent.lastName,
@@ -87,9 +87,9 @@ export async function getDashboard(req: Request, res: Response) {
 
     // Siblings for student accounts (sharing guardians in same school)
     if (student && siblings.length === 0) {
-      const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p) => p.parentId);
+      const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id, parent: { schoolId } }, select: { parentId: true } })).map((p) => p.parentId);
       if (parentIds.length) {
-        const siblingLinkIds = (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds } }, select: { studentId: true } }))
+        const siblingLinkIds = (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds }, student: { schoolId, deletedAt: null } }, select: { studentId: true } }))
           .map((p) => p.studentId)
           .filter((id) => id !== student?.id);
         siblings = siblingLinkIds.length
