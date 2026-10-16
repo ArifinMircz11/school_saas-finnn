@@ -24,7 +24,7 @@ export async function markAttendance(req: Request, res: Response) {
 
   if (req.auth?.roles.includes('TEACHER')) {
     const teacher = await prisma.teacher.findFirst({
-      where: { userId: req.auth.sub, schoolId },
+      where: { userId: req.auth.sub, schoolId, deletedAt: null },
       include: { sections: { select: { sectionId: true } } },
     });
     if (!teacher) throw new ApiError(403, 'Teacher account required');
@@ -55,7 +55,7 @@ export async function getAttendance(req: Request, res: Response) {
   const where: any = { schoolId };
   if (sectionId && studentId) throw new ApiError(400, 'Provide either sectionId or studentId, not both');
   if (req.auth?.roles.includes('STUDENT')) {
-    const ownStudent = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
+    const ownStudent = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId, deletedAt: null }, select: { id: true } });
     if (!ownStudent) throw new ApiError(404, 'Student not found');
     if (studentId && studentId !== ownStudent.id) throw new ApiError(404, 'Student not found');
     if (sectionId) throw new ApiError(403, 'Students may only view their own attendance');
@@ -84,7 +84,7 @@ export async function attendanceSummary(req: Request, res: Response) {
   const requestedStudentId = req.query.studentId as string | undefined;
   const where: any = { schoolId };
   if (req.auth?.roles.includes('STUDENT')) {
-    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
+    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId, deletedAt: null }, select: { id: true } });
     if (!student) throw new ApiError(404, 'Student not found');
     if (requestedStudentId && requestedStudentId !== student.id) throw new ApiError(404, 'Student not found');
     where.studentId = student.id;
