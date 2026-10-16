@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Initial rollout is server-mediated only. Firebase Admin SDK requests bypass
+    // these rules; all API authorization and tenant filters must be enforced server-side.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
