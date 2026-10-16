@@ -165,13 +165,22 @@ app.get('/v1/:collection', requireFirebaseIdentity, async (req: AuthenticatedReq
       .limit(100)
       .get();
     res.json({
-      data: snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
+      data: snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id, tenantId: req.principal!.tenantId })),
       limit: 100,
     });
   } catch {
     res.status(500).json({ error: 'Could not read records from the configured Firestore database.' });
   }
 });
+
+async function belongsToTenant(
+  collection: 'students' | 'classes',
+  documentId: string,
+  tenantId: string,
+): Promise<boolean> {
+  const snapshot = await db.collection(collection).doc(documentId).get();
+  return snapshot.exists && snapshot.get('tenantId') === tenantId;
+}
 
 app.post('/v1/:collection', requireFirebaseIdentity, async (req: AuthenticatedRequest, res) => {
   const parsedCollection = collectionSchema.safeParse(req.params.collection);
@@ -188,6 +197,28 @@ app.post('/v1/:collection', requireFirebaseIdentity, async (req: AuthenticatedRe
   }
 
   try {
+    const record = parsedRecord.data;
+    const references: Array<{ collection: 'students' | 'classes'; id: string }> = [];
+
+    if (parsedCollection.data === 'students' && 'classId' in record && record.classId) {
+      references.push({ collection: 'classes', id: record.classId });
+    }
+    if ((parsedCollection.data === 'attendance' || parsedCollection.data === 'feeRecords') && 'studentId' in record) {
+      references.push({ collection: 'students', id: record.studentId });
+    }
+    if ((parsedCollection.data === 'homework' || parsedCollection.data === 'exams') && 'classId' in record && record.classId) {
+      references.push({ collection: 'classes', id: record.classId });
+    }
+
+    for (const reference of references) {
+      if (!(await belongsToTenant(reference.collection, reference.id, req.principal!.tenantId))) {
+        return res.status(422).json({
+          error: 'Referenced record does not exist in the authenticated tenant.',
+          field: reference.collection === 'students' ? 'studentId' : 'classId',
+        });
+      }
+    }
+
     const now = new Date().toISOString();
     const ref = await db.collection(parsedCollection.data).add({
       ...parsedRecord.data,
