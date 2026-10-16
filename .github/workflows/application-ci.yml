@@ -1,0 +1,67 @@
+name: Application CI
+
+on:
+  push:
+    branches:
+      - feature/firebase-new-database
+    paths:
+      - "backend/**"
+      - "firebase-next/**"
+      - "packages/**"
+      - "parent/**"
+      - "principal/**"
+      - "school-admin/**"
+      - "super-admin/**"
+      - "teacher/**"
+      - "package.json"
+      - ".github/workflows/application-ci.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "firebase-next/**"
+      - "packages/**"
+      - "parent/**"
+      - "principal/**"
+      - "school-admin/**"
+      - "super-admin/**"
+      - "teacher/**"
+      - "package.json"
+      - ".github/workflows/application-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-existing-app:
+    name: Build existing PostgreSQL/Prisma app and dashboards
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install monorepo dependencies
+        run: npm install
+      - name: Generate Prisma client
+        run: npm --workspace backend run prisma:generate
+      - name: Build backend and all dashboards
+        run: npm run build
+
+  build-firebase-next:
+    name: Build isolated Firebase/Firestore service
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Firebase service dependencies
+        working-directory: firebase-next
+        run: npm install
+      - name: Build Firebase service
+        working-directory: firebase-next
+        run: npm run build
