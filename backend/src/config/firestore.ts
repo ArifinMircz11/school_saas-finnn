@@ -1,63 +1,74 @@
-const admin = require('firebase-admin');
-const { getFirestore } = require('firebase-admin/firestore');
 import path from 'path';
 import fs from 'fs';
+const admin = require('firebase-admin');
+const { getFirestore } = require('firebase-admin/firestore');
 
-let firebaseConfig: any = {};
-try {
-  const configPath = path.resolve(process.cwd(), '../firebase-applet-config.json');
-  if (fs.existsSync(configPath)) {
-    firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-  }
-} catch (e) {
-  console.warn('Could not load firebase-applet-config.json:', e);
-}
+type FirebaseAppletConfig = {
+  projectId?: string;
+  firestoreDatabaseId?: string;
+};
 
-const projectId = process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId || 'sample-firebase-ai-app-5c298';
-const databaseId = process.env.FIRESTORE_DATABASE_ID || firebaseConfig.firestoreDatabaseId || 'ai-studio-schoolsaasfinnn-5fae9775-87f1-4cd4-9ed0-dadf91c5bce5';
-
-if (!admin.apps || !admin.apps.length) {
+function loadFirebaseConfig(): FirebaseAppletConfig {
+  const configPath = path.resolve(__dirname, '../../../firebase-applet-config.json');
   try {
-    admin.initializeApp({
-      projectId: projectId,
-    });
-    console.log('✅ Firebase Admin SDK initialized for project:', projectId);
-  } catch (error: any) {
-    console.error('❌ Firebase Admin SDK initialization error:', error?.message || error);
+    if (!fs.existsSync(configPath)) return {};
+    return JSON.parse(fs.readFileSync(configPath, 'utf-8')) as FirebaseAppletConfig;
+  } catch {
+    // Do not log file contents or environment secrets.
+    console.warn('Firebase applet configuration could not be loaded.');
+    return {};
   }
 }
+
+const firebaseConfig = loadFirebaseConfig();
+const projectId = process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId;
+const databaseId = process.env.FIRESTORE_DATABASE_ID || firebaseConfig.firestoreDatabaseId;
 
 export function getFirestoreInstance() {
+  if (!projectId || !databaseId) {
+    console.warn('Firestore is not configured: FIREBASE_PROJECT_ID and FIRESTORE_DATABASE_ID are required.');
+    return null;
+  }
+
   try {
-    const app = admin.apps && admin.apps.length > 0 ? admin.apps[0] : admin.initializeApp({ projectId: projectId });
-    return getFirestore(app, databaseId);
-  } catch (e: any) {
-    console.warn('Could not get firestore instance with databaseId:', databaseId, e?.message || e);
-    try {
-      return getFirestore();
-    } catch (err) {
-      return null;
+    let app = admin.apps?.[0];
+    if (!app) {
+      app = admin.initializeApp({ projectId });
+    } else {
+      const initializedProjectId = app.options?.projectId;
+      if (initializedProjectId && initializedProjectId !== projectId) {
+        console.error('Firestore configuration projectId does not match the initialized Firebase Admin app.');
+        return null;
+      }
     }
+
+    // Never silently fall back to the default database: the configured database is authoritative.
+    return getFirestore(app, databaseId);
+  } catch {
+    // Avoid returning an instance for a different database or logging sensitive runtime details.
+    console.error('Firestore client initialization failed for the configured database.');
+    return null;
   }
 }
 
 export const firestore = getFirestoreInstance();
 
-// Test connection helper
-export async function testFirestoreConnection(): Promise<{ success: boolean; message: string; databaseId: string }> {
+export async function testFirestoreConnection(): Promise<{ success: boolean; message: string; databaseId: string | null }> {
+  if (!databaseId) {
+    return { success: false, message: 'Firestore database is not configured.', databaseId: null };
+  }
+
   try {
     const db = getFirestoreInstance();
     if (!db) {
-      return { success: false, message: 'Firestore client not initialized', databaseId };
+      return { success: false, message: 'Firestore client is not initialized for the configured database.', databaseId };
     }
-    const testDocRef = db.collection('_health_check').doc('connection_test');
-    await testDocRef.set({ testedAt: new Date().toISOString() }, { merge: true });
-    const docSnap = await testDocRef.get();
-    if (docSnap.exists) {
-      return { success: true, message: 'Successfully connected to Google Cloud Firestore and verified read/write access.', databaseId };
-    }
-    return { success: false, message: 'Test document write succeeded but read verification failed.', databaseId };
-  } catch (error: any) {
-    return { success: false, message: `Firestore connection test failed: ${error?.message || error}`, databaseId };
+
+    // Read-only probe: health checks must not create or mutate documents.
+    await db.collection('_health_check').limit(1).get();
+    return { success: true, message: 'Firestore read probe succeeded for the configured database.', databaseId };
+  } catch {
+    // Return a generic error to callers; detailed provider errors may expose environment information.
+    return { success: false, message: 'Firestore read probe failed for the configured database.', databaseId };
   }
 }
