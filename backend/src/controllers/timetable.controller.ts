@@ -36,14 +36,14 @@ export async function getTimetable(req: Request, res: Response) {
   const where: any = { schoolId };
   if (day) where.day = day;
   if (req.auth?.roles.includes('STUDENT')) {
-    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true, sectionId: true } });
+    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId, deletedAt: null }, select: { id: true, sectionId: true } });
     if (!student) throw new ApiError(404, 'Student not found');
     if (studentId && studentId !== student.id) throw new ApiError(404, 'Student not found');
     if (sectionId && sectionId !== student.sectionId) throw new ApiError(404, 'Timetable not found');
     if (teacherId) throw new ApiError(403, 'Students cannot query another teacher timetable');
     where.sectionId = student.sectionId || '__no_section__';
   } else if (req.auth?.roles.includes('TEACHER')) {
-    const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
+    const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth.sub, schoolId, deletedAt: null }, select: { id: true } });
     if (!teacher) throw new ApiError(404, 'Teacher not found');
     if (teacherId && teacherId !== teacher.id) throw new ApiError(404, 'Timetable not found');
     where.teacherId = teacher.id;
