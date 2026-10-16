@@ -53,6 +53,12 @@ export async function getStudent(req: Request, res: Response) {
 export async function createStudent(req: Request, res: Response) {
   const body = studentSchema.parse(req.body);
   const schoolId = schoolOf(req);
+  const cls = await prisma.class.findFirst({ where: { id: body.classId, schoolId } });
+  if (!cls) throw new ApiError(404, 'Class not found');
+  if (body.sectionId) {
+    const section = await prisma.section.findFirst({ where: { id: body.sectionId, schoolId, classId: body.classId } });
+    if (!section) throw new ApiError(404, 'Section not found in this class');
+  }
   const school = await prisma.school.findUnique({ where: { id: schoolId } });
   const studentCount = await prisma.student.count({ where: { schoolId, deletedAt: null } });
   if (school && studentCount >= school.maxStudents) throw new ApiError(400, 'Student limit reached for this school');
@@ -68,14 +74,11 @@ export async function createStudent(req: Request, res: Response) {
     ? body.email.toLowerCase()
     : `${admissionNo.toLowerCase()}@student.${schoolId}.local`;
   const student = await prisma.$transaction(async (tx) => {
-    let user = await tx.user.findUnique({ where: { email: studentEmail } });
-    if (!user) {
-      user = await tx.user.create({
-        data: { schoolId, email: studentEmail, firstName: body.firstName, lastName: body.lastName, passwordHash, roles: { create: [{ role: 'STUDENT' }] } },
-      });
-    } else {
-      await tx.user.update({ where: { id: user.id }, data: { passwordHash, firstName: body.firstName, lastName: body.lastName } });
-    }
+    const existingUser = await tx.user.findUnique({ where: { email: studentEmail }, select: { id: true } });
+    if (existingUser) throw new ApiError(409, 'A user with this email already exists');
+    const user = await tx.user.create({
+      data: { schoolId, email: studentEmail, firstName: body.firstName, lastName: body.lastName, passwordHash, roles: { create: [{ role: 'STUDENT' }] } },
+    });
     const s = await tx.student.create({
       data: {
         schoolId, firstName: body.firstName, lastName: body.lastName,
@@ -101,8 +104,15 @@ export async function createStudent(req: Request, res: Response) {
 
 export async function updateStudent(req: Request, res: Response) {
   const body = studentSchema.parse(req.body);
+  const schoolId = schoolOf(req);
   const existing = await prisma.student.findUnique({ where: { id: req.params.id } });
-  if (!existing || existing.schoolId !== schoolOf(req)) throw new ApiError(404, 'Student not found');
+  if (!existing || existing.schoolId !== schoolId) throw new ApiError(404, 'Student not found');
+  const cls = await prisma.class.findFirst({ where: { id: body.classId, schoolId } });
+  if (!cls) throw new ApiError(404, 'Class not found');
+  if (body.sectionId) {
+    const section = await prisma.section.findFirst({ where: { id: body.sectionId, schoolId, classId: body.classId } });
+    if (!section) throw new ApiError(404, 'Section not found in this class');
+  }
   const student = await prisma.student.update({
     where: { id: req.params.id },
     data: { firstName: body.firstName, lastName: body.lastName, gender: body.gender, dob: new Date(body.dob), classId: body.classId, sectionId: body.sectionId, bloodGroup: body.bloodGroup, address: body.address, photoUrl: body.photoUrl },
