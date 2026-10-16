@@ -123,7 +123,44 @@ export function dateFromFirestore(value: any): Date {
   return new Date(value);
 }
 
-export function publicUser(user: RecordData): Record<string, any> {
-  const { _docPath, ...data } = user;
-  return data;
+
+export async function findEmailOtp(
+  filters: { email?: string; code?: string; purpose?: string },
+): Promise<RecordData | null> {
+  let query: any = dbOrThrow().collection('system_emailOtps');
+  if (filters.email !== undefined) query = query.where('email', '==', filters.email);
+  if (filters.code !== undefined) query = query.where('code', '==', filters.code);
+  if (filters.purpose !== undefined) query = query.where('purpose', '==', filters.purpose);
+  const snapshot = await query.limit(1).get();
+  return snapshot.empty ? null : toRecord(snapshot.docs[0]);
+}
+
+export async function upsertEmailOtp(
+  email: string,
+  code: string,
+  purpose: string,
+  expiresAt: Date,
+): Promise<void> {
+  const existing = await findEmailOtp({ email });
+  const db = dbOrThrow();
+  if (existing?._docPath) {
+    await db.doc(existing._docPath).update({ code, purpose, expiresAt });
+    return;
+  }
+  const id = randomUUID();
+  await db.collection('system_emailOtps').doc(id).create({
+    id, email, code, purpose, expiresAt, createdAt: new Date(),
+  });
+}
+
+export async function deleteEmailOtp(record: RecordData): Promise<void> {
+  if (!record._docPath) throw new Error('Email OTP document path is missing');
+  await dbOrThrow().doc(record._docPath).delete();
+}
+
+export async function findSchoolById(id: string): Promise<Record<string, any> | null> {
+  const snapshot = await dbOrThrow().collection('schools').doc(id).get();
+  if (!snapshot.exists) return null;
+  const data = snapshot.data() || {};
+  return { id: snapshot.id, name: data.name, logoUrl: data.logoUrl, status: data.status };
 }
