@@ -13,6 +13,10 @@ export async function submitAdmission(req: Request, res: Response) {
   const body = admissionSchema.parse(req.body);
   const school = await prisma.school.findFirst({ where: { code: body.schoolCode, status: 'ACTIVE' } });
   if (!school) throw new ApiError(404, 'School not found or inactive');
+  if (body.classId) {
+    const cls = await prisma.class.findFirst({ where: { id: body.classId, schoolId: school.id } });
+    if (!cls) throw new ApiError(404, 'Class not found for the selected school');
+  }
   const applicationNo = `APP-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
   const admission = await prisma.admission.create({
     data: {
@@ -37,6 +41,9 @@ export async function reviewAdmission(req: Request, res: Response) {
   const admission = await prisma.admission.findUnique({ where: { id: req.params.id }, include: { documents: true } });
   if (!admission || admission.schoolId !== schoolOf(req)) throw new ApiError(404, 'Admission not found');
   if (status === 'APPROVED') {
+    if (admission.classId && !await prisma.class.findFirst({ where: { id: admission.classId, schoolId: admission.schoolId } })) {
+      throw new ApiError(409, 'Admission class is no longer valid for this school');
+    }
     const result = await convertAdmissionToStudent(admission);
     await prisma.admission.update({ where: { id: admission.id }, data: { status: 'CONVERTED' } });
     await auditLog({ userId: req.auth?.sub, schoolId: schoolOf(req), ip: req.ip, action: 'ADMISSION_APPROVED', module: 'ADMISSIONS' });
@@ -75,7 +82,8 @@ async function convertAdmissionToStudent(admission: any) {
         data: { schoolId, email: studentEmail, firstName: admission.firstName, lastName: admission.lastName, passwordHash, roles: { create: [{ role: 'STUDENT' }] } },
       });
     } else {
-      await tx.user.update({ where: { id: user.id }, data: { passwordHash, firstName: admission.firstName, lastName: admission.lastName } });
+      // Generated student emails must never be reused to overwrite an existing identity.
+      throw new ApiError(409, 'Generated student account already exists; retry admission conversion');
     }
     const st = await tx.student.create({
       data: { schoolId, firstName: admission.firstName, lastName: admission.lastName, gender: admission.gender || 'OTHER', dob: admission.dob || new Date(), admissionNo, classId: admission.classId, userId: user.id },
