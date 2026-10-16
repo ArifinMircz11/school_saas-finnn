@@ -24,7 +24,7 @@ function collection(schoolId: string, name: string) {
 }
 
 async function listDocs(schoolId: string, name: string, field?: string, value?: unknown): Promise<Doc[]> {
-  let query: FirebaseFirestore.Query = collection(schoolId, name);
+  let query: any = collection(schoolId, name);
   if (field) query = query.where(field, '==', value);
   const snapshot = await query.get();
   return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
