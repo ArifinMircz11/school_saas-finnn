@@ -98,27 +98,27 @@ router.get('/fees/reports', requirePermission('reports.view'), asyncHandler(feeP
 router.post('/fees/notifications', requirePermission('fees.collect'), asyncHandler(feePayments.generateFeeNotifications));
 
 // ---------- Attendance ----------
-router.get('/attendance', requirePermission('attendance.view'), asyncHandler(attendance.getAttendance));
+router.get('/attendance', requirePermissionOrRole('attendance.view', 'STUDENT'), asyncHandler(attendance.getAttendance));
 router.post('/attendance/mark', requirePermission('attendance.mark'), asyncHandler(attendance.markAttendance));
-router.get('/attendance/summary', requirePermission('attendance.view'), asyncHandler(attendance.attendanceSummary));
+router.get('/attendance/summary', requirePermissionOrRole('attendance.view', 'STUDENT'), asyncHandler(attendance.attendanceSummary));
 
 // ---------- Homework ----------
-router.get('/homework', requirePermission('homework.view'), asyncHandler(homework.listHomework));
+router.get('/homework', requirePermissionOrRole('homework.view', 'STUDENT'), asyncHandler(homework.listHomework));
 router.post('/homework', requireRole('TEACHER', 'SCHOOL_ADMIN'), upload.single('attachment') as any, asyncHandler(homework.createHomework));
 router.post('/homework/:id/submit', upload.single('attachment') as any, asyncHandler(homework.submitHomework));
 router.post('/homework/submissions/:id/grade', requirePermission('homework.grade'), asyncHandler(homework.gradeHomework));
 
 // ---------- Exams & Results ----------
-router.get('/exams', requirePermission('exams.view'), asyncHandler(exams.listExams));
+router.get('/exams', requirePermissionOrRole('exams.view', 'STUDENT'), asyncHandler(exams.listExams));
 router.post('/exams', requirePermission('exams.create'), asyncHandler(exams.createExam));
 router.post('/exams/subjects', requirePermission('exams.create'), asyncHandler(exams.addExamSubject));
-router.get('/marks', requirePermission('results.view'), asyncHandler(exams.listMarks));
+router.get('/marks', requirePermissionOrRole('results.view', 'STUDENT'), asyncHandler(exams.listMarks));
 router.post('/marks', requirePermission('results.enter'), asyncHandler(exams.enterMarks));
-router.get('/results', requirePermission('results.view'), asyncHandler(exams.studentResults));
+router.get('/results', requirePermissionOrRole('results.view', 'STUDENT'), asyncHandler(exams.studentResults));
 router.post('/results/publish', requirePermission('results.publish'), asyncHandler(exams.publishResults));
 
 // ---------- Timetable ----------
-router.get('/timetable', requirePermission('timetable.view'), asyncHandler(timetable.getTimetable));
+router.get('/timetable', requirePermissionOrRole('timetable.view', 'STUDENT'), asyncHandler(timetable.getTimetable));
 router.post('/timetable', requirePermission('timetable.manage'), asyncHandler(timetable.createTimetableEntry));
 
 // ---------- Notices & Notifications ----------
@@ -130,11 +130,11 @@ router.post('/notifications/:id/read', asyncHandler(notices.markRead));
 router.post('/notifications/read-all', asyncHandler(notices.markAllRead));
 
 // ---------- Documents & Certificates ----------
-router.get('/documents', requirePermission('documents.view'), asyncHandler(docs.listStudentDocuments));
+router.get('/documents', requirePermissionOrRole('documents.view', 'STUDENT'), asyncHandler(docs.listStudentDocuments));
 router.post('/documents/upload', requirePermission('documents.upload'), upload.single('document') as any, asyncHandler(docs.uploadStudentDocument));
 router.post('/documents/:id/verify', requirePermission('documents.verify'), asyncHandler(docs.verifyDocument));
 router.delete('/documents/:id', requirePermission('documents.upload'), asyncHandler(docs.deleteDocument));
-router.get('/certificates', requirePermission('certificates.view'), asyncHandler(docs.listCertificates));
+router.get('/certificates', requirePermissionOrRole('certificates.view', 'STUDENT'), asyncHandler(docs.listCertificates));
 router.post('/certificates/generate', requirePermission('certificates.generate'), asyncHandler(docs.generateCertificate));
 // ---------- Reports / Settings / Tickets / Audit ----------
 router.get('/reports', requirePermission('reports.view'), asyncHandler(misc.getReports));
