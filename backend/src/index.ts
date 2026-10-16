@@ -9,6 +9,10 @@ async function main() {
     await prisma.$connect();
     console.log('✅ Database connected');
   } catch (e) {
+    if (config.nodeEnv === 'production') {
+      // Do not serve production requests while the authoritative database is unavailable.
+      throw e;
+    }
     console.warn('⚠️ Database connection warning: running without active database connection.', e);
   }
   app.listen(port, '0.0.0.0', () => {
@@ -17,6 +21,6 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error(e);
+  console.error('❌ Backend startup failed.', e);
   process.exit(1);
 });

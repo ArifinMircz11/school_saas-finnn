@@ -7,6 +7,7 @@ import router from './routes';
 import { errorHandler, notFound } from './utils/response';
 import { apiLimiter } from './middleware/rateLimiter';
 import { requireAuth, requireRole } from './middleware/auth';
+import { prisma } from './config/database';
 
 export const app = express();
 
@@ -26,7 +27,7 @@ app.use(cors({
   credentials: true,
 }));
 
-app.use(compression());
+app.use(compression() as unknown as import('express').RequestHandler);
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
@@ -36,6 +37,28 @@ app.get('/api/health', (_req: Request, res: Response) => {
 
 // Apply API rate limiting before every API endpoint, including health diagnostics.
 app.use('/api', apiLimiter);
+
+// Readiness probe verifies the primary operational database, unlike the liveness probe above.
+// Keep provider details and connection strings out of the public response.
+app.get('/api/health/ready', async (_req: Request, res: Response) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.status(200).json({
+      success: true,
+      status: 'ready',
+      dependencies: { postgresql: 'ok' },
+      timestamp: new Date().toISOString(),
+    });
+  } catch {
+    res.status(503).json({
+      success: false,
+      status: 'not_ready',
+      dependencies: { postgresql: 'unavailable' },
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
 
 app.get('/api/firestore-health', requireAuth, requireRole('SUPER_ADMIN'), async (_req: Request, res: Response) => {
   const { testFirestoreConnection } = await import('./config/firestore');
