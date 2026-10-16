@@ -9,37 +9,53 @@ import { sendNotification } from '../services/notification.service';
 export async function collectFee(req: Request, res: Response) {
   const body = collectFeeSchema.parse(req.body);
   const schoolId = schoolOf(req);
-  const studentFee = await prisma.studentFee.findUnique({ where: { id: body.studentFeeId }, include: { student: true } });
-  if (!studentFee || studentFee.schoolId !== schoolId) throw new ApiError(404, 'Student fee not found');
-  const remaining = Number(studentFee.totalAmount) - Number(studentFee.paidAmount) - Number(studentFee.discount);
-  if (Number(body.amount) > remaining) throw new ApiError(400, 'Amount exceeds outstanding');
-  const receiptNo = `RCP-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
-  const payment = await prisma.feePayment.create({
-    data: { schoolId, studentFeeId: studentFee.id, amount: body.amount, method: body.method || 'CASH', transactionId: body.transactionId, status: 'SUCCESS', collectedBy: req.auth?.sub, receiptNo, paidAt: new Date() },
+  
+  const result = await prisma.$transaction(async (tx: any) => {
+    const studentFee = await tx.studentFee.findUnique({ where: { id: body.studentFeeId }, include: { student: true } });
+    if (!studentFee || studentFee.schoolId !== schoolId) throw new ApiError(404, 'Student fee not found');
+    const remaining = Number(studentFee.totalAmount) - Number(studentFee.paidAmount) - Number(studentFee.discount);
+    if (Number(body.amount) > remaining) throw new ApiError(400, 'Amount exceeds outstanding');
+    const receiptNo = `RCP-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
+    const payment = await tx.feePayment.create({
+      data: { schoolId, studentFeeId: studentFee.id, amount: body.amount, method: body.method || 'CASH', transactionId: body.transactionId, status: 'SUCCESS', collectedBy: req.auth?.sub, receiptNo, paidAt: new Date() },
+    });
+    const newPaid = Number(studentFee.paidAmount) + Number(body.amount);
+    const newStatus = newPaid >= Number(studentFee.totalAmount) - Number(studentFee.discount) ? 'PAID' : 'PARTIAL';
+    const updated = await tx.studentFee.update({ where: { id: studentFee.id }, data: { paidAmount: newPaid, status: newStatus } });
+    return { payment, studentFee: updated, receiptNo };
   });
-  const newPaid = Number(studentFee.paidAmount) + Number(body.amount);
-  const newStatus = newPaid >= Number(studentFee.totalAmount) - Number(studentFee.discount) ? 'PAID' : 'PARTIAL';
-    const updated = await prisma.studentFee.update({ where: { id: studentFee.id }, data: { paidAmount: newPaid, status: newStatus } });
-  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'COLLECT_FEE', module: 'FEES', details: { receiptNo } });
-  return created(res, { payment, studentFee: updated, receiptNo }, 'Fee collected');
+
+  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'COLLECT_FEE', module: 'FEES', details: { receiptNo: result.receiptNo } });
+  return created(res, result, 'Fee collected');
 }
 
 export async function studentFees(req: Request, res: Response) {
   const { studentId, status } = req.query as { studentId?: string; status?: string };
   const schoolId = schoolOf(req);
   const where: any = { schoolId };
-  if (studentId) where.studentId = studentId;
   // STUDENT role: students (and parents using student login) see only their own
   // fees plus siblings' fees (same guardians).
-  if (req.auth?.roles.includes('STUDENT') && !studentId) {
+  if (req.auth?.roles.includes('STUDENT')) {
     const student = await prisma.student.findFirst({ where: { userId: req.auth.sub } });
     if (student) {
-      const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p) => p.parentId);
+      const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p: any) => p.parentId);
       const siblingIds = parentIds.length
-        ? (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds } }, select: { studentId: true } })).map((p) => p.studentId)
+        ? (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds } }, select: { studentId: true } })).map((p: any) => p.studentId)
         : [];
-      where.studentId = { in: [student.id, ...siblingIds] };
+      const allowedStudentIds = [student.id, ...siblingIds];
+      if (studentId) {
+        if (!allowedStudentIds.includes(studentId)) {
+          throw new ApiError(403, 'Forbidden: cannot access another student fee record');
+        }
+        where.studentId = studentId;
+      } else {
+        where.studentId = { in: allowedStudentIds };
+      }
+    } else {
+      where.studentId = 'none';
     }
+  } else if (studentId) {
+    where.studentId = studentId;
   }
   if (status) where.status = status.toUpperCase();
   const fees = await prisma.studentFee.findMany({

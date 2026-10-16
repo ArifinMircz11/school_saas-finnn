@@ -50,13 +50,29 @@ export async function getDashboard(req: Request, res: Response) {
     return ok(res, { role: 'TEACHER', data: { teacher, todayClasses, pendingHomework: myHomework, totalStudents: studentCount } }, 'Dashboard');
   }
 
-  if (roles.includes('STUDENT')) {
-    // Unified payload for students AND parents: parents log in with a student's
-    // credentials, so there is no separate PARENT login at the data layer.
-    const student = await prisma.student.findFirst({
+  if (roles.includes('STUDENT') || roles.includes('PARENT')) {
+    // Unified payload for students AND parents
+    let student = await prisma.student.findFirst({
       where: { userId: req.auth!.sub },
-      include: { class: true, section: true, attendance: { orderBy: { date: 'desc' } }, fees: { include: { structure: true } } },
+      include: { class: true, section: true, attendance: { take: 30, orderBy: { date: 'desc' } }, fees: { include: { structure: true } } },
     });
+
+    let siblings: any[] = [];
+
+    // If account has PARENT role and no direct Student record, query via Parent -> StudentParent
+    if (!student && roles.includes('PARENT')) {
+      const parentRecord = await prisma.parent.findFirst({ where: { userId: req.auth!.sub } });
+      if (parentRecord) {
+        const studentLinks = await prisma.studentParent.findMany({
+          where: { parentId: parentRecord.id },
+          include: { student: { include: { class: true, section: true, attendance: { take: 30, orderBy: { date: 'desc' } }, fees: { include: { structure: true } } } } },
+        });
+        if (studentLinks.length > 0) {
+          student = studentLinks[0].student;
+          siblings = studentLinks.slice(1).map((link: any) => link.student);
+        }
+      }
+    }
 
     // Guardians of this student (data-only records — no login accounts).
     const guardians = student
@@ -69,18 +85,17 @@ export async function getDashboard(req: Request, res: Response) {
         }))
       : [];
 
-    // Siblings: students sharing a guardian in the same school (so a parent can switch children).
-    let siblings: any[] = [];
-    if (student) {
+    // Siblings for student accounts (sharing guardians in same school)
+    if (student && siblings.length === 0) {
       const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p) => p.parentId);
       if (parentIds.length) {
         const siblingLinkIds = (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds } }, select: { studentId: true } }))
           .map((p) => p.studentId)
-          .filter((id) => id !== student.id);
+          .filter((id) => id !== student?.id);
         siblings = siblingLinkIds.length
           ? await prisma.student.findMany({
               where: { id: { in: siblingLinkIds }, schoolId, deletedAt: null },
-              include: { class: true, section: true, attendance: { take: 1, orderBy: { date: 'desc' } }, fees: { include: { structure: true } } },
+              include: { class: true, section: true, attendance: { take: 30, orderBy: { date: 'desc' } }, fees: { include: { structure: true } } },
             })
           : [];
       }

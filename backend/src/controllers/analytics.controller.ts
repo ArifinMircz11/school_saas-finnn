@@ -14,7 +14,14 @@ export async function getPlatformAnalytics(req: Request, res: Response) {
   const expiringSubs = await prisma.schoolSubscription.count({
     where: { status: 'ACTIVE', endDate: { lte: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) } },
   });
-  const revenueAgg = await prisma.invoice.aggregate({ _sum: { amount: true }, where: { status: 'PAID' } });
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+  const monthlyRevenueAgg = await prisma.invoice.aggregate({
+    _sum: { amount: true },
+    where: { status: 'PAID', paidAt: { gte: startOfMonth, lte: endOfMonth } },
+  });
+  const totalRevenueAgg = await prisma.invoice.aggregate({ _sum: { amount: true }, where: { status: 'PAID' } });
 
   const recordedSchools = await prisma.school.findMany({ select: { createdAt: true } });
   const schoolGrowth = Array.from({ length: 6 }, (_, i) => {
@@ -38,7 +45,8 @@ export async function getPlatformAnalytics(req: Request, res: Response) {
       totalSchools, activeSchools, trialSchools, suspendedSchools,
       totalStudents, totalTeachers, totalParents,
       activeSubscriptions: activeSubs, expiringSubscriptions: expiringSubs,
-      monthlyRevenue: Number(revenueAgg._sum.amount || 0),
+      monthlyRevenue: Number(monthlyRevenueAgg._sum.amount || 0),
+      totalRevenue: Number(totalRevenueAgg._sum.amount || 0),
     },
     schoolGrowth,
     planDistribution,

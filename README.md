@@ -1,10 +1,13 @@
 # School Management SaaS
 
-A production-ready, multi-tenant **School Management SaaS platform** with five role-based frontend applications and one centralized backend.
+A production-ready, multi-tenant **School Management SaaS platform** with five role-based frontend applications and a centralized backend.
 
 ```
 school-management-saas/
-├── backend/        # Centralized Node.js + Express + TypeScript + Prisma REST API (PostgreSQL)
+├── backend/        # Centralized Node.js + Express + TypeScript API (PostgreSQL/Prisma + Google Cloud Firestore)
+├── packages/
+│   ├── api-client/ # Shared HTTP client, token refresh & React Query hooks (@saas/api-client)
+│   └── shared-ui/  # Shared design tokens, primitives, layout & login shell (@saas/shared-ui)
 ├── super-admin/    # Vite React app — platform administration (superadmin.yoursaas.com)
 ├── school-admin/   # Vite React app — manage one school (admin.school.yoursaas.com)
 ├── principal/      # Vite React app — school leadership, performance & approvals (principal.school.yoursaas.com)
@@ -12,9 +15,7 @@ school-management-saas/
 └── parent/         # Vite React app — ONE portal for BOTH students & parents (portal.school.yoursaas.com)
 ```
 
-Each dashboard is a **completely self-contained** React/Vite/TypeScript application (its own routes, layout,
-sidebar, auth flow, and an **inlined copy of the shared UI + API client** under `src/shared/`) so each one can be
-built, deployed and linked independently. They all talk to the **same centralized backend**.
+Each dashboard is a self-contained React/Vite/TypeScript application consuming shared libraries via npm workspaces (`@saas/api-client` and `@saas/shared-ui`). All dashboards communicate with the **same centralized backend API**.
 
 > **Students & Parents share a single dashboard and a single login.** There is one portal (`parent/`) that serves
 > both the `STUDENT` and `PARENT` roles. **Parents use the student's credentials** — there is no separate parent
@@ -24,34 +25,39 @@ built, deployed and linked independently. They all talk to the **same centralize
 
 ## Features
 
-- **Multi-tenant isolation** — tenant is resolved from the authenticated session, never trusted from the client.
+- **Multi-tenant isolation** — tenant (`schoolId`) is resolved server-side from the authenticated session, never trusted from the client.
 - **Auth** — JWT access + refresh tokens, login/logout, forgot/reset password, email verification, session management.
 - **RBAC + permission system** — roles `SUPER_ADMIN`, `SCHOOL_ADMIN`, `PRINCIPAL`, `TEACHER`, `PARENT`, `STUDENT`, `STAFF` plus granular permissions (`students.view`, `fees.collect`, `results.publish`, `principal.results.approve`, …).
-- **Admissions** — public form → document upload → school review → approve → auto-create student + guardian record (parents log in with the student's credentials).
+- **Admissions** — public form → document upload → school review → approve → auto-create student + guardian record (parents log in with student credentials).
 - **Students / Parents / Teachers / Staff** management.
-- **Fees** — categories, structures, assignments, payments, receipts, overdue, automatic fee notifications (7d/3d/due/overdue).
+- **Fees & Payments** — categories, structures, assignments, payments, receipts, overdue tracking, automated notifications. Protected by **atomic database transactions** to prevent race conditions.
 - **Attendance** — present/absent/late/leave with daily/monthly extraction + parental/student view.
 - **Homework** — create/publish, student submissions, teacher grading.
 - **Exams & Results** — exams, exam subjects, mark entry, publish results.
-- **Timetable** — with teacher/section conflict detection.
-- **Notices & centralized Notifications** with a bell + unread count in every dashboard.
-- **Principal Dashboard** — separate app for school leadership: executive overview, at-risk students, school-wide
-  attendance analytics, academic performance (class/subject/exam-wise, grades, pass %, top & weak students),
-  teacher performance & workload, examination publication status, admission monitoring, fee overview
-  (read-only financial summaries), a centralized **leave & approvals** center (approve / reject / request changes
-  with full audit logging), notices, reports (PDF/Excel/CSV export) and analytics — all derived from existing
-  data and strictly tenant-scoped to the principal's school. Principal permissions are granular and configured
-  at the school level via a `PrincipalPermission` policy.
+- **Timetable** — with teacher and section conflict detection.
+- **Notices & Centralized Notifications** — role-targeted announcements and notification center with unread counters.
+- **Principal Dashboard** — executive overview, at-risk students, attendance analytics, academic performance, approvals workflow, teacher workload, and reports.
 - **Documents & Certificates** — secure file storage (Cloudinary or object storage), verification, download; certificate/TC generation & history.
 - **Reports** — students, fees, attendance, examinations; CSV/PDF export endpoints.
-- **Subscriptions** — plans, subscriptions, trials, invoices, usage (`850/1000 students`).
-- **Audit logging** of every sensitive operation.
-- **Security** — password hashing (bcrypt), secure headers, CORS, rate limiting, file validation, soft deletion.
+- **Subscriptions** — plans, subscriptions, trials, invoices, student usage limits.
+- **Audit logging** — audit trail recording for every sensitive operation.
+- **Security** — password hashing (bcrypt), secure HTTP headers, CORS, rate limiting, file validation, soft deletion.
+
+## Database & Cloud Architecture
+
+The platform supports a robust database architecture:
+1. **Primary Relational Store (PostgreSQL via Prisma)**: Handles operational entities with relational constraints, foreign keys, compound indexes, and ACID transactions.
+2. **Google Cloud Firestore Integration (Firebase Admin SDK)**: Configured for cloud document storage and staged module migration.
+   - Project: `sample-firebase-ai-app-5c298`
+   - Named Database: `ai-studio-schoolsaasfinnn-5fae9775-87f1-4cd4-9ed0-dadf91c5bce5`
+   - Initialized via `backend/src/config/firestore.ts` with strict fail-fast validation (no silent default database or project fallbacks).
+   - Diagnostic Endpoint: `GET /api/firestore-health` (rate-limited, protected by `requireAuth` + `requireRole('SUPER_ADMIN')` with sanitized error reporting).
 
 ## Prerequisites
 
-- Node.js 18+
-- PostgreSQL (local or hosted)
+- Node.js 20+
+- PostgreSQL (local, hosted, or Cloud SQL)
+- npm 9+ (workspaces enabled)
 
 ## Getting Started
 
@@ -59,111 +65,57 @@ built, deployed and linked independently. They all talk to the **same centralize
 
 ```bash
 cd backend
-cp .env.example .env        # edit DATABASE_URL, JWT secrets, Cloudinary, email providers, public URLs
+cp .env.example .env        # configure DATABASE_URL, JWT secrets, email providers, etc.
 npm install
-npx prisma generate         # generate the Prisma client from prisma/schema.prisma
-npx prisma db push          # create the tables in PostgreSQL
-npm run seed                # seed permissions + plans; optionally bootstrap a super admin
-npm run dev                 # start the API at http://localhost:5000/api
+npm run prisma:generate     # generate Prisma Client
+npm run prisma:push         # push schema to PostgreSQL
+npm run seed                # seed permissions, subscription plans, and demo accounts
+npm run dev                 # starts API on port 3000 (or PORT env var)
 ```
 
-> To create the first super admin, set `SUPER_ADMIN_EMAIL`/`SUPER_ADMIN_PASSWORD` env vars before `npm run seed`,
-> or call `POST /api/auth/bootstrap`.
-
-Public admission form (no auth, requires an ACTIVE school's `code`):
-
-```
-POST /api/public/admissions
-{ schoolCode, firstName, lastName, dob, gender, classId, parentName, parentEmail, parentPhone }
+Run Firestore integration diagnostics:
+```bash
+npm run test:firestore      # verifies named database selection and tenant boundaries
 ```
 
-### 2. Dashboards (each is deployable independently)
+### 2. Dashboards (deployable independently or concurrently)
 
 ```bash
-cd super-admin && npm install && npm run dev   # port 5173
-cd school-admin && npm install && npm run dev  # port 5174
-cd principal     && npm install && npm run dev  # port 5178
-cd teacher      && npm install && npm run dev  # port 5175
-cd parent       && npm install && npm run dev  # port 5176  (students AND parents log in here)
+npm --workspace super-admin run dev   # Super Admin dashboard
+npm --workspace school-admin run dev  # School Admin dashboard
+npm --workspace principal run dev     # Principal dashboard
+npm --workspace teacher run dev      # Teacher dashboard
+npm --workspace parent run dev       # Student & Parent portal
 ```
 
-Set `VITE_API_URL` per app to point at the centralized API in production.
+### 3. Demo Accounts
 
-After the first `npm run seed`, the following **demo accounts** are available so you can log into every dashboard immediately
-(all share the password `Demo@123`; they belong to the seeded `DEMO` school except the super admin):
+All demo accounts belong to the seeded `DEMO` school (except the platform Super Admin) and share the default password `Demo@123`:
 
-| Dashboard            | Email                 | Password  |
-|----------------------|-----------------------|-----------|
-| Super Admin          | `super-admin@demo.com`| `Demo@123`|
-| School Admin         | `admin@demo.com`      | `Demo@123`|
-| Principal            | `principal@demo.com`  | `Demo@123`|
-| Teacher              | `teacher@demo.com`    | `Demo@123`|
-| Student & Parent portal | `student@demo.com` | `Demo@123`|  ← Student 1 (parents use their child's credentials)
-| Student & Parent portal | `student2@demo.com` | `Demo@123`|  ← Student 2 (sibling — unique login)
+| Dashboard            | Email                 | Password  | Role |
+|----------------------|-----------------------|-----------|------|
+| Super Admin          | `super-admin@demo.com`| `Demo@123`| Platform Super Admin |
+| School Admin         | `admin@demo.com`      | `Demo@123`| School Administrator |
+| Principal            | `principal@demo.com`  | `Demo@123`| Principal / Leadership |
+| Teacher              | `teacher@demo.com`    | `Demo@123`| Teacher |
+| Student & Parent     | `student@demo.com`    | `Demo@123`| Student 1 (Parent uses child's credentials) |
+| Student & Parent     | `student2@demo.com`   | `Demo@123`| Student 2 (Sibling login) |
 
-### 3. Suggested first-run flow
+## Email Delivery
 
-1. Bootstrap a **super admin** → log in to the Super Admin app.
-2. Create a school + admin account (Super Admin → Schools → New School).
-3. Log in to the **School Admin** app → create session, classes/sections, add teachers/students/parents, fee structures.
-4. Create a **Principal** account (School Admin → Users → assign the `PRINCIPAL` role). This auto-creates a principal
-   profile and grants the default principal permission set. The Principal **cannot** be created as a standalone
-   super-admin; a principal always belongs to a single school.
-5. Log in to the **Principal** app → monitor attendance & academic performance, review/approve admissions &
-   pending approvals, request result publication, and generate reports.
-6. Log in as a **teacher** → mark attendance, publish homework, enter marks.
-7. Open the **Student & Parent portal** (`parent/` app) — log in with the **student's credentials**
-   (`student@demo.com` / `Demo@123`). **Every student has a unique login, even siblings** (`student2@demo.com`
-   is the seeded sibling). Students see their own academic profile, grades, fees and homework; parents use
-   one child's credentials and can switch between all their children on the dashboard. The dashboard also
-   shows the **Parents / Guardians** section and a **performance report analysis** (subject averages,
-   overall average and exam trend derived from published results).
+Emails are sent via **REST API** with automatic provider failover:
+- **Resend** is the primary provider.
+- **Brevo (Sendinblue)** serves as the automatic fallback provider.
+- If neither key is configured in dev, emails are safely logged to console (`[mail stub]`) without breaking request flows.
 
-## Backend architecture
-
-Commands flow: `Frontend → Express route → controller → service → Prisma → PostgreSQL`. Authorization is enforced
-server-side on every route via `requireAuth`, `requireRole`, `requirePermission`, and tenant checks.
-
-### Configuring APIs for production
-
-All URLs are resolved from environment variables at startup — no backend URL is hard-coded:
-
-- Each dashboard reads `import.meta.env.VITE_API_URL` to reach the centralized
-  backend. Copy `<app>/.env.example` to `.env` (or `.env.production`) and set
-  `VITE_API_URL=https://api.yoursaas.com/api`. In dev each app's `.env.example`
-  points at `http://localhost:5000/api`. When the variable is unset the client
-  falls back to a relative (same-origin) base, so production deployments work
-  with a single same-origin build if desired.
-
-#### Email delivery
-
-Emails are sent via **REST API**, not SMTP. Resend is the primary provider; if a
-Resend request fails (or no Resend key is configured) the service automatically
-falls back to **Brevo (Sendinblue)** over its REST endpoint. The same fallback is
-used by `POST /api/auth/forgot-password`, `verify-email`, etc. If neither key is
-set, emails are logged as a dev stub (`[mail stub]`) and never fail the request.
-
-Set these in `backend/.env`:
-
-```
-EMAIL_FROM=noreply@yoursaas.com      # fallback "from" address
-RESEND_API_KEY=re_…                  # primary provider
-RESEND_FROM=                         # overrides EMAIL_FROM
-RESEND_BASE_URL=https://api.resend.com
-BREVO_API_KEY=…                      # automatic fallback provider
-BREVO_FROM=                          # overrides EMAIL_FROM
-BREVO_FROM_NAME=School SaaS
-BREVO_BASE_URL=https://api.brevo.com
+```env
+EMAIL_FROM=noreply@yoursaas.com
+RESEND_API_KEY=re_...
+BREVO_API_KEY=...
 ```
 
-## Extensibility
+## Security & Architecture Highlights
 
-The modular structure (controllers/services/routes + Prisma models) is designed so new modules — Transport, Hostel,
-Library, Payroll, Inventory, Bus Tracking, Online Classes, SMS/WhatsApp, Mobile Apps — can be added without rebuilding
-core architecture. Add a Prisma model, a controller/service/routes group, and a new dashboard/route section.
-
-## Security notes
-
-- Authorization is enforced by the backend. The frontends only select *which* operations to expose.
-- Tenant (`schoolId`) is always derived from the token / database lookup.
-- All sensitive operations write an audit log entry.
+- **Atomic Financial Transactions**: `collectFee()` runs inside an interactive database transaction (`prisma.$transaction`) to guarantee that payment records and outstanding fee balances remain consistent under concurrent requests.
+- **Strict Tenant & Student Ownership**: `schoolOf(req)` enforces tenant boundaries from verified JWT claims. In `studentFees()`, queries specifying `studentId` are validated against the student's authorized family records to prevent cross-student fee leakage.
+- **Build Quality**: Verified with pure TypeScript compilation (`tsc`) across all packages and dashboards without swallowing errors.

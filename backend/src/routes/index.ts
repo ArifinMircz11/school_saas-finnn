@@ -47,7 +47,7 @@ router.post('/public/admissions', publicLimiter, asyncHandler(admissions.submitA
   // any future / unauthenticated admission form). It is intentionally NOT listed as a
   // supported feature of the five dashboards because no UI calls it yet. Use the school
   // dashboard's Documents page (/documents/upload) for authenticated document uploads.
-  router.post('/public/admissions/:id/documents', publicLimiter, upload.single('document'), asyncHandler(admissions.uploadAdmissionDocument));
+  router.post('/public/admissions/:id/documents', publicLimiter, upload.single('document') as any, asyncHandler(admissions.uploadAdmissionDocument));
 
 // ---------- Authenticated base ----------
 router.use(requireAuth);
@@ -104,8 +104,8 @@ router.get('/attendance/summary', asyncHandler(attendance.attendanceSummary));
 
 // ---------- Homework ----------
 router.get('/homework', asyncHandler(homework.listHomework));
-router.post('/homework', requireRole('TEACHER', 'SCHOOL_ADMIN'), upload.single('attachment'), asyncHandler(homework.createHomework));
-router.post('/homework/:id/submit', upload.single('attachment'), asyncHandler(homework.submitHomework));
+router.post('/homework', requireRole('TEACHER', 'SCHOOL_ADMIN'), upload.single('attachment') as any, asyncHandler(homework.createHomework));
+router.post('/homework/:id/submit', upload.single('attachment') as any, asyncHandler(homework.submitHomework));
 router.post('/homework/submissions/:id/grade', requirePermission('homework.grade'), asyncHandler(homework.gradeHomework));
 
 // ---------- Exams & Results ----------
@@ -131,7 +131,7 @@ router.post('/notifications/read-all', asyncHandler(notices.markAllRead));
 
 // ---------- Documents & Certificates ----------
 router.get('/documents', asyncHandler(docs.listStudentDocuments));
-router.post('/documents/upload', requirePermission('documents.upload'), upload.single('document'), asyncHandler(docs.uploadStudentDocument));
+router.post('/documents/upload', requirePermission('documents.upload'), upload.single('document') as any, asyncHandler(docs.uploadStudentDocument));
 router.post('/documents/:id/verify', requirePermission('documents.verify'), asyncHandler(docs.verifyDocument));
 router.delete('/documents/:id', requirePermission('documents.upload'), asyncHandler(docs.deleteDocument));
 router.get('/certificates', asyncHandler(docs.listCertificates));

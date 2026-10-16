@@ -8,7 +8,7 @@ export interface AuthUser {
   [k: string]: unknown;
 }
 
-let apiBaseUrl = (import.meta.env.VITE_API_URL as string || (import.meta.env.DEV ? 'http://localhost:5000/api' : '')).replace(/\/$/, '');
+let apiBaseUrl = (import.meta.env.VITE_API_URL as string || (typeof window !== 'undefined' && window.location.port === '3000' ? '/api' : (import.meta.env.DEV ? 'http://localhost:3000/api' : '/api'))).replace(/\/$/, '');
 export const setApiBase = (u: string) => { apiBaseUrl = u.replace(/\/$/, ''); };
 
 const KEY_USER = 'saa_user';

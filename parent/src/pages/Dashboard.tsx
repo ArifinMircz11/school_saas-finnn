@@ -19,7 +19,7 @@ export default function Dashboard() {
               <b>Select Child:</b>
               <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                 {children.map((c) => (
-                  <button key={c.student.id} onClick={() => setSel(c.student.id)}
+                  <button key={c.student.id} onClick={() => { setSel(c.student.id); setChild(c); }}
                     style={{
                       padding: '8px 14px', borderRadius: 8, border: c.student.id === activeChild?.student.id ? '2px solid #4f46e5' : '1px solid #e5e7eb',
                       background: c.student.id === activeChild?.student.id ? '#eef2ff' : '#fff', cursor: 'pointer',
