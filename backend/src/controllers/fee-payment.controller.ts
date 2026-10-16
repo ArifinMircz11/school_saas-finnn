@@ -34,11 +34,11 @@ export async function studentFees(req: Request, res: Response) {
   const schoolId = schoolOf(req);
   const where: any = { schoolId };
   if (req.auth?.roles.includes('STUDENT')) {
-    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId } });
+    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId, deletedAt: null } });
     if (!student) throw new ApiError(404, 'Student not found');
     const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p: any) => p.parentId);
     const siblingIds = parentIds.length
-      ? (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds }, student: { schoolId } }, select: { studentId: true } })).map((p: any) => p.studentId)
+      ? (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds }, student: { schoolId, deletedAt: null } }, select: { studentId: true } })).map((p: any) => p.studentId)
       : [];
     const allowedStudentIds = [student.id, ...siblingIds];
     if (studentId && !allowedStudentIds.includes(studentId)) throw new ApiError(404, 'Student fee not found');
