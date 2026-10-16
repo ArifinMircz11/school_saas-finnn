@@ -62,7 +62,9 @@ export async function notifySection(schoolId: string, sectionId: string, title: 
   const db = dbOrThrow();
   const students = await db.collection('schools').doc(schoolId).collection('students')
     .where('sectionId', '==', sectionId).get();
-  const userIds = [...new Set(students.docs.map((doc) => doc.get('userId')).filter((id): id is string => typeof id === 'string' && id.length > 0))];
+  const userIds: string[] = Array.from(new Set<string>(students.docs
+    .map((doc) => doc.get('userId'))
+    .filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)));
   const notifications = await Promise.all(userIds.map((userId) =>
     sendNotification({ schoolId, userId, title, message })
   ));
