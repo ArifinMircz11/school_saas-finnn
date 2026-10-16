@@ -10,37 +10,88 @@ export async function markAttendance(req: Request, res: Response) {
   const body = markAttendanceSchema.parse(req.body);
   const schoolId = schoolOf(req);
   const date = new Date(body.date);
+  if (Number.isNaN(date.getTime())) throw new ApiError(400, 'Invalid attendance date');
   date.setHours(0, 0, 0, 0);
-  let count = 0;
-  for (const rec of body.records) {
-    const student = await prisma.student.findUnique({ where: { id: rec.studentId } });
-    if (!student || student.schoolId !== schoolId) continue;
-    const existing = await prisma.attendance.findUnique({ where: { studentId_date: { studentId: rec.studentId, date } } });
-    if (existing) {
-      await prisma.attendance.update({ where: { id: existing.id }, data: { status: rec.status, remarks: rec.remarks, markedBy: req.auth?.sub } });
-    } else {
-      await prisma.attendance.create({ data: { schoolId, studentId: rec.studentId, date, status: rec.status, remarks: rec.remarks, markedBy: req.auth?.sub } });
+  const studentIds = body.records.map((record) => record.studentId);
+  if (new Set(studentIds).size !== studentIds.length) throw new ApiError(400, 'Duplicate student IDs are not allowed in one attendance batch');
+  if (!studentIds.length) return ok(res, { marked: 0 }, 'No attendance records to mark');
+
+  const students = await prisma.student.findMany({
+    where: { id: { in: studentIds }, schoolId, deletedAt: null },
+    select: { id: true, sectionId: true },
+  });
+  if (students.length !== studentIds.length) throw new ApiError(404, 'One or more students were not found in this school');
+
+  if (req.auth?.roles.includes('TEACHER')) {
+    const teacher = await prisma.teacher.findFirst({
+      where: { userId: req.auth.sub, schoolId },
+      include: { sections: { select: { sectionId: true } } },
+    });
+    if (!teacher) throw new ApiError(403, 'Teacher account required');
+    const allowedSectionIds = new Set(teacher.sections.map((item) => item.sectionId));
+    if (students.some((student) => !student.sectionId || !allowedSectionIds.has(student.sectionId))) {
+      throw new ApiError(403, 'Teachers may only mark attendance for their assigned sections');
     }
-    count++;
   }
-  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'MARK_ATTENDANCE', module: 'ATTENDANCE', details: { date: body.date, count } });
-  return ok(res, { marked: count }, 'Attendance marked');
+
+  await prisma.$transaction(async (tx) => {
+    for (const record of body.records) {
+      const existing = await tx.attendance.findUnique({ where: { studentId_date: { studentId: record.studentId, date } } });
+      if (existing) {
+        if (existing.schoolId !== schoolId) throw new ApiError(404, 'Attendance record not found');
+        await tx.attendance.update({ where: { id: existing.id }, data: { status: record.status, remarks: record.remarks, markedBy: req.auth?.sub } });
+      } else {
+        await tx.attendance.create({ data: { schoolId, studentId: record.studentId, date, status: record.status, remarks: record.remarks, markedBy: req.auth?.sub } });
+      }
+    }
+  });
+  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'MARK_ATTENDANCE', module: 'ATTENDANCE', details: { date: body.date, count: body.records.length } });
+  return ok(res, { marked: body.records.length }, 'Attendance marked');
+}
+
+async function parentStudentIds(userId: string, schoolId: string): Promise<string[]> {
+  const parent = await prisma.parent.findFirst({ where: { userId, schoolId }, select: { id: true } });
+  if (!parent) throw new ApiError(404, 'Parent record not found');
+  const links = await prisma.studentParent.findMany({
+    where: { parentId: parent.id, student: { schoolId, deletedAt: null } },
+    select: { studentId: true },
+  });
+  const ids = [...new Set(links.map((link) => link.studentId))];
+  if (!ids.length) throw new ApiError(404, 'No linked students found');
+  return ids;
 }
 
 export async function getAttendance(req: Request, res: Response) {
   const schoolId = schoolOf(req);
   const { date, sectionId, studentId } = req.query as { date?: string; sectionId?: string; studentId?: string };
   const where: any = { schoolId };
+  const roles = req.auth?.roles ?? [];
   if (sectionId && studentId) throw new ApiError(400, 'Provide either sectionId or studentId, not both');
-  if (studentId) {
+
+  if (roles.includes('STUDENT')) {
+    const own = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId, deletedAt: null }, select: { id: true } });
+    if (!own) throw new ApiError(404, 'Student not found');
+    if (studentId && studentId !== own.id) throw new ApiError(404, 'Student not found');
+    if (sectionId) throw new ApiError(403, 'Students may only view their own attendance');
+    where.studentId = own.id;
+  } else if (roles.includes('PARENT')) {
+    if (sectionId) throw new ApiError(403, 'Parents may only view linked students attendance');
+    const ids = await parentStudentIds(req.auth!.sub, schoolId);
+    if (studentId && !ids.includes(studentId)) throw new ApiError(404, 'Student not found');
+    where.studentId = studentId || { in: ids };
+  } else if (studentId) {
+    const student = await prisma.student.findFirst({ where: { id: studentId, schoolId, deletedAt: null } });
+    if (!student) throw new ApiError(404, 'Student not found');
     where.studentId = studentId;
   } else if (sectionId) {
-    const section = await prisma.section.findUnique({ where: { id: sectionId } });
-    if (!section || section.schoolId !== schoolId) throw new ApiError(404, 'Section not found');
+    const section = await prisma.section.findFirst({ where: { id: sectionId, schoolId } });
+    if (!section) throw new ApiError(404, 'Section not found');
     where.student = { sectionId };
   }
+
   if (date) {
     const d = new Date(date);
+    if (Number.isNaN(d.getTime())) throw new ApiError(400, 'Invalid date');
     d.setHours(0, 0, 0, 0);
     where.date = d;
   }
@@ -50,9 +101,23 @@ export async function getAttendance(req: Request, res: Response) {
 
 export async function attendanceSummary(req: Request, res: Response) {
   const schoolId = schoolOf(req);
-  const studentId = req.query.studentId as string | undefined;
+  const requestedStudentId = req.query.studentId as string | undefined;
   const where: any = { schoolId };
-  if (studentId) where.studentId = studentId;
+  const roles = req.auth?.roles ?? [];
+  if (roles.includes('STUDENT')) {
+    const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId, deletedAt: null }, select: { id: true } });
+    if (!student) throw new ApiError(404, 'Student not found');
+    if (requestedStudentId && requestedStudentId !== student.id) throw new ApiError(404, 'Student not found');
+    where.studentId = student.id;
+  } else if (roles.includes('PARENT')) {
+    const ids = await parentStudentIds(req.auth!.sub, schoolId);
+    if (requestedStudentId && !ids.includes(requestedStudentId)) throw new ApiError(404, 'Student not found');
+    where.studentId = requestedStudentId || { in: ids };
+  } else if (requestedStudentId) {
+    const student = await prisma.student.findFirst({ where: { id: requestedStudentId, schoolId, deletedAt: null }, select: { id: true } });
+    if (!student) throw new ApiError(404, 'Student not found');
+    where.studentId = student.id;
+  }
   const records = await prisma.attendance.findMany({ where, select: { status: true } });
   const total = records.length;
   const present = records.filter((r) => r.status === 'PRESENT').length;

@@ -3,10 +3,7 @@ import { prisma } from '../config/database';
 import { ApiError, ok, created } from '../utils/response';
 import { sessionSchema, classSchema, sectionSchema, subjectSchema } from '../validators';
 import { auditLog } from '../utils/audit';
-
-function schoolOf(req: Request): string {
-  return req.auth?.schoolId!;
-}
+import { schoolOf } from './student.controller';
 
 // ---------- SESSIONS ----------
 export async function listSessions(req: Request, res: Response) {
@@ -15,16 +12,24 @@ export async function listSessions(req: Request, res: Response) {
 }
 export async function createSession(req: Request, res: Response) {
   const body = sessionSchema.parse(req.body);
-  const session = await prisma.academicSession.create({ data: { schoolId: schoolOf(req), name: body.name, startDate: new Date(body.startDate), endDate: new Date(body.endDate), isActive: body.isActive || false } });
+  const schoolId = schoolOf(req);
+  const session = await prisma.academicSession.create({ data: { schoolId, name: body.name, startDate: new Date(body.startDate), endDate: new Date(body.endDate), isActive: body.isActive || false } });
   if (body.isActive) {
-    await prisma.academicSession.updateMany({ where: { schoolId: schoolOf(req), id: { not: session.id } }, data: { isActive: false } });
+    await prisma.academicSession.updateMany({ where: { schoolId, id: { not: session.id } }, data: { isActive: false } });
   }
-  await auditLog({ userId: req.auth?.sub, schoolId: schoolOf(req), ip: req.ip, action: 'CREATE_SESSION', module: 'ACADEMIC' });
+  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'CREATE_SESSION', module: 'ACADEMIC' });
   return created(res, session, 'Session created');
 }
 export async function setActiveSession(req: Request, res: Response) {
-  await prisma.academicSession.updateMany({ where: { schoolId: schoolOf(req) }, data: { isActive: false } });
-  const session = await prisma.academicSession.update({ where: { id: req.params.id }, data: { isActive: true } });
+  const schoolId = schoolOf(req);
+  const target = await prisma.academicSession.findFirst({ where: { id: req.params.id, schoolId, deletedAt: null } });
+  if (!target) throw new ApiError(404, 'Academic session not found');
+  await prisma.$transaction(async (tx) => {
+    await tx.academicSession.updateMany({ where: { schoolId, id: { not: target.id } }, data: { isActive: false } });
+    await tx.academicSession.update({ where: { id: target.id }, data: { isActive: true } });
+  });
+  const session = await prisma.academicSession.findUnique({ where: { id: target.id } });
+  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'ACTIVATE_SESSION', module: 'ACADEMIC', details: { sessionId: target.id } });
   return ok(res, session, 'Session activated');
 }
 
@@ -47,10 +52,11 @@ export async function createClass(req: Request, res: Response) {
 // ---------- SECTIONS ----------
 export async function createSection(req: Request, res: Response) {
   const body = sectionSchema.parse(req.body);
-  const cls = await prisma.class.findUnique({ where: { id: body.classId } });
-  if (!cls || cls.schoolId !== schoolOf(req)) throw new ApiError(403, 'Tenant mismatch');
-  const section = await prisma.section.create({ data: { schoolId: schoolOf(req), classId: body.classId, name: body.name } });
-  await auditLog({ userId: req.auth?.sub, schoolId: schoolOf(req), ip: req.ip, action: 'CREATE_SECTION', module: 'ACADEMIC' });
+  const schoolId = schoolOf(req);
+  const cls = await prisma.class.findFirst({ where: { id: body.classId, schoolId } });
+  if (!cls) throw new ApiError(404, 'Class not found');
+  const section = await prisma.section.create({ data: { schoolId, classId: body.classId, name: body.name } });
+  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'CREATE_SECTION', module: 'ACADEMIC' });
   return created(res, section, 'Section created');
 }
 

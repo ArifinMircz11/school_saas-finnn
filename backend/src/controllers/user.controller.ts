@@ -110,7 +110,7 @@ async function grantPrincipalDefaults(userId: string) {
 export async function listUsers(req: Request, res: Response) {
   const isSuper = req.auth?.roles.includes('SUPER_ADMIN');
   const where: any = { deletedAt: null };
-  if (!isSuper) where.schoolId = req.auth!.schoolId ?? null;
+  if (!isSuper) where.schoolId = schoolOf(req);
   else if (req.query.schoolId) where.schoolId = req.query.schoolId as string;
   if (req.query.q) {
     where.OR = [
@@ -148,7 +148,7 @@ export async function createUser(req: Request, res: Response) {
   const passwordHash = await hashPassword(body.password);
 
   // Tenant: school users may only create accounts within their own school.
-  const schoolId = isSuper ? (body.schoolId || null) : (req.auth?.schoolId ?? null);
+  const schoolId = isSuper ? (body.schoolId || null) : schoolOf(req);
   const user = await prisma.user.create({
     data: {
       schoolId,
@@ -167,7 +167,7 @@ export async function createUser(req: Request, res: Response) {
   if (roles.includes('TEACHER')) await grantTeacherDefaults(user.id);
   if (roles.includes('STUDENT')) await grantStudentDefaults(user.id);
   if (roles.includes('SCHOOL_ADMIN')) await grantSchoolAdminDefaults(user.id);
-  await auditLog({ userId: req.auth?.sub, schoolId: req.auth?.schoolId, ip: req.ip, action: 'CREATE_USER', module: 'USERS', details: { id: user.id, roles } });
+  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'CREATE_USER', module: 'USERS', details: { id: user.id, roles } });
   return created(res, { id: user.id, email: user.email }, 'User created');
 }
 
@@ -175,9 +175,10 @@ export async function updateUser(req: Request, res: Response) {
   const body = updateUserSchema.parse(req.body);
   // Tenant guard: a school user may only modify accounts that belong to their school.
   const isSuper = req.auth?.roles.includes('SUPER_ADMIN');
+  const tenantSchoolId = isSuper ? null : schoolOf(req);
   const target = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true, schoolId: true } });
   if (!target) throw new ApiError(404, 'User not found');
-  if (!isSuper && target.schoolId !== req.auth?.schoolId) throw new ApiError(403, 'Forbidden: you may only manage users in your own school');
+  if (!isSuper && target.schoolId !== tenantSchoolId) throw new ApiError(403, 'Forbidden: you may only manage users in your own school');
   const data: any = {};
   if (body.firstName) data.firstName = body.firstName;
   if (body.lastName) data.lastName = body.lastName;
@@ -197,9 +198,10 @@ export async function setUserRoles(req: Request, res: Response) {
     throw new ApiError(403, 'Only a SUPER_ADMIN can assign the SUPER_ADMIN role');
   }
   // Tenant isolation.
+  const tenantSchoolId = isSuper ? null : schoolOf(req);
   const target = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true, schoolId: true } });
   if (!target) throw new ApiError(404, 'User not found');
-  if (!isSuper && target.schoolId !== req.auth?.schoolId) throw new ApiError(403, 'Forbidden: you may only manage users in your own school');
+  if (!isSuper && target.schoolId !== tenantSchoolId) throw new ApiError(403, 'Forbidden: you may only manage users in your own school');
   await prisma.$transaction(async (tx) => {
     await tx.userRoleAssignment.deleteMany({ where: { userId: req.params.id } });
     if (roles.length) {
@@ -217,7 +219,7 @@ export async function setUserRoles(req: Request, res: Response) {
   if (roles.includes('SCHOOL_ADMIN')) await grantSchoolAdminDefaults(req.params.id);
   if (roles.includes('TEACHER')) await grantTeacherDefaults(req.params.id);
   if (roles.includes('STUDENT')) await grantStudentDefaults(req.params.id);
-  await auditLog({ userId: req.auth?.sub, schoolId: req.auth?.schoolId, ip: req.ip, action: 'SET_USER_ROLES', module: 'USERS', details: { roles } });
+  await auditLog({ userId: req.auth?.sub, schoolId: tenantSchoolId || req.auth?.schoolId, ip: req.ip, action: 'SET_USER_ROLES', module: 'USERS', details: { roles } });
   return ok(res, null, 'Roles updated');
 }
 
@@ -234,9 +236,10 @@ export async function setUserPermissions(req: Request, res: Response) {
   if (!isSuper && permissionKeys.some((k) => SUPER_ADMIN_ONLY_PERMISSIONS.includes(k))) {
     throw new ApiError(403, 'Forbidden: only a SUPER_ADMIN may grant platform-level permissions');
   }
+  const tenantSchoolId = isSuper ? null : schoolOf(req);
   const target = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true, schoolId: true } });
   if (!target) throw new ApiError(404, 'User not found');
-  if (!isSuper && target.schoolId !== req.auth?.schoolId) throw new ApiError(403, 'Forbidden: you may only manage users in your own school');
+  if (!isSuper && target.schoolId !== tenantSchoolId) throw new ApiError(403, 'Forbidden: you may only manage users in your own school');
   const perms = await prisma.permission.findMany({ where: { key: { in: permissionKeys } }, select: { id: true } });
   await prisma.$transaction(async (tx) => {
     await tx.userPermission.deleteMany({ where: { userId: req.params.id } });
@@ -246,7 +249,7 @@ export async function setUserPermissions(req: Request, res: Response) {
       });
     }
   });
-  await auditLog({ userId: req.auth?.sub, schoolId: req.auth?.schoolId, ip: req.ip, action: 'SET_PERMISSIONS', module: 'USERS' });
+  await auditLog({ userId: req.auth?.sub, schoolId: tenantSchoolId || req.auth?.schoolId, ip: req.ip, action: 'SET_PERMISSIONS', module: 'USERS' });
   return ok(res, null, 'Permissions updated');
 }
 

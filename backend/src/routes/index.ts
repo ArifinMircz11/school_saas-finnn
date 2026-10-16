@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAuth, requireRole, requirePermission } from '../middleware/auth';
+import { requireAuth, requireRole, requirePermission, requirePermissionOrRole } from '../middleware/auth';
 import { authLimiter, publicLimiter } from '../middleware/rateLimiter';
 import { asyncHandler } from '../utils/asyncHandler';
 import { upload } from '../middleware/upload';
@@ -62,7 +62,7 @@ const superOnly = requireRole('SUPER_ADMIN');
 router.get('/academic/profile', asyncHandler(academic.getAcademicProfile));
 router.get('/academic/sessions', asyncHandler(academic.listSessions));
 router.post('/academic/sessions', requirePermission('academic.manage'), asyncHandler(academic.createSession));
-router.post('/academic/sessions/:id/activate', asyncHandler(academic.setActiveSession));
+router.post('/academic/sessions/:id/activate', requirePermission('academic.manage'), asyncHandler(academic.setActiveSession));
 router.get('/academic/classes', asyncHandler(academic.listClasses));
 router.post('/academic/classes', requirePermission('academic.manage'), asyncHandler(academic.createClass));
 router.post('/academic/sections', requirePermission('academic.manage'), asyncHandler(academic.createSection));
@@ -70,59 +70,59 @@ router.get('/academic/subjects', asyncHandler(academic.listSubjects));
 router.post('/academic/subjects', requirePermission('academic.manage'), asyncHandler(academic.createSubject));
 
 // ---------- Students / Parents / Teachers / Staff ----------
-router.get('/students', asyncHandler(students.listStudents));
-router.get('/students/:id', asyncHandler(students.getStudent));
+router.get('/students', requirePermissionOrRole('students.view', 'STUDENT'), asyncHandler(students.listStudents));
+router.get('/students/:id', requirePermissionOrRole('students.view', 'STUDENT'), asyncHandler(students.getStudent));
 router.post('/students', requirePermission('students.create'), asyncHandler(students.createStudent));
 router.patch('/students/:id', requirePermission('students.update'), asyncHandler(students.updateStudent));
 router.delete('/students/:id', requirePermission('students.delete'), asyncHandler(students.deleteStudent));
 
-router.get('/parents', asyncHandler(teacherParent.listParents));
+router.get('/parents', requirePermission('parents.view'), asyncHandler(teacherParent.listParents));
 router.post('/parents', requirePermission('parents.create'), asyncHandler(teacherParent.createParent));
-router.get('/teachers', asyncHandler(teacherParent.listTeachers));
+router.get('/teachers', requirePermission('teachers.view'), asyncHandler(teacherParent.listTeachers));
 router.post('/teachers', requirePermission('teachers.create'), asyncHandler(teacherParent.createTeacher));
-router.get('/staff', asyncHandler(teacherParent.listStaff));
+router.get('/staff', requirePermission('teachers.view'), asyncHandler(teacherParent.listStaff));
 
 // ---------- Admissions ----------
 router.get('/admissions', requirePermission('admissions.view'), asyncHandler(admissions.listAdmissions));
 router.post('/admissions/:id/review', requirePermission('admissions.review'), asyncHandler(admissions.reviewAdmission));
 
 // ---------- Fees ----------
-router.get('/fees/categories', asyncHandler(fees.listFeeCategories));
+router.get('/fees/categories', requirePermission('fees.view'), asyncHandler(fees.listFeeCategories));
 router.post('/fees/categories', requirePermission('fees.create'), asyncHandler(fees.createFeeCategory));
-router.get('/fees/structures', asyncHandler(fees.listFeeStructures));
+router.get('/fees/structures', requirePermission('fees.view'), asyncHandler(fees.listFeeStructures));
 router.post('/fees/structures', requirePermission('fees.create'), asyncHandler(fees.createFeeStructure));
 router.post('/fees/assign', requirePermission('fees.assign'), asyncHandler(fees.assignFees));
 router.get('/fees/students', asyncHandler(feePayments.studentFees));
 router.post('/fees/collect', requirePermission('fees.collect'), asyncHandler(feePayments.collectFee));
 router.get('/fees/reports', requirePermission('reports.view'), asyncHandler(feePayments.feeReports));
-router.post('/fees/notifications', asyncHandler(feePayments.generateFeeNotifications));
+router.post('/fees/notifications', requirePermission('fees.collect'), asyncHandler(feePayments.generateFeeNotifications));
 
 // ---------- Attendance ----------
-router.get('/attendance', asyncHandler(attendance.getAttendance));
+router.get('/attendance', requirePermissionOrRole('attendance.view', 'STUDENT'), asyncHandler(attendance.getAttendance));
 router.post('/attendance/mark', requirePermission('attendance.mark'), asyncHandler(attendance.markAttendance));
-router.get('/attendance/summary', asyncHandler(attendance.attendanceSummary));
+router.get('/attendance/summary', requirePermissionOrRole('attendance.view', 'STUDENT'), asyncHandler(attendance.attendanceSummary));
 
 // ---------- Homework ----------
-router.get('/homework', asyncHandler(homework.listHomework));
+router.get('/homework', requirePermissionOrRole('homework.view', 'STUDENT'), asyncHandler(homework.listHomework));
 router.post('/homework', requireRole('TEACHER', 'SCHOOL_ADMIN'), upload.single('attachment') as any, asyncHandler(homework.createHomework));
 router.post('/homework/:id/submit', upload.single('attachment') as any, asyncHandler(homework.submitHomework));
 router.post('/homework/submissions/:id/grade', requirePermission('homework.grade'), asyncHandler(homework.gradeHomework));
 
 // ---------- Exams & Results ----------
-router.get('/exams', asyncHandler(exams.listExams));
+router.get('/exams', requirePermissionOrRole('exams.view', 'STUDENT'), asyncHandler(exams.listExams));
 router.post('/exams', requirePermission('exams.create'), asyncHandler(exams.createExam));
 router.post('/exams/subjects', requirePermission('exams.create'), asyncHandler(exams.addExamSubject));
-router.get('/marks', asyncHandler(exams.listMarks));
+router.get('/marks', requirePermissionOrRole('results.view', 'STUDENT'), asyncHandler(exams.listMarks));
 router.post('/marks', requirePermission('results.enter'), asyncHandler(exams.enterMarks));
-router.get('/results', asyncHandler(exams.studentResults));
+router.get('/results', requirePermissionOrRole('results.view', 'STUDENT'), asyncHandler(exams.studentResults));
 router.post('/results/publish', requirePermission('results.publish'), asyncHandler(exams.publishResults));
 
 // ---------- Timetable ----------
-router.get('/timetable', asyncHandler(timetable.getTimetable));
+router.get('/timetable', requirePermissionOrRole('timetable.view', 'STUDENT'), asyncHandler(timetable.getTimetable));
 router.post('/timetable', requirePermission('timetable.manage'), asyncHandler(timetable.createTimetableEntry));
 
 // ---------- Notices & Notifications ----------
-router.get('/notices', asyncHandler(notices.listNotices));
+router.get('/notices', requirePermission('notices.view'), asyncHandler(notices.listNotices));
 router.post('/notices', requirePermission('notices.create'), asyncHandler(notices.createNotice));
 router.get('/notifications', asyncHandler(notices.myNotifications));
 router.get('/notifications/unread', asyncHandler(notices.unreadCount));
@@ -130,21 +130,21 @@ router.post('/notifications/:id/read', asyncHandler(notices.markRead));
 router.post('/notifications/read-all', asyncHandler(notices.markAllRead));
 
 // ---------- Documents & Certificates ----------
-router.get('/documents', asyncHandler(docs.listStudentDocuments));
+router.get('/documents', requirePermissionOrRole('documents.view', 'STUDENT'), asyncHandler(docs.listStudentDocuments));
 router.post('/documents/upload', requirePermission('documents.upload'), upload.single('document') as any, asyncHandler(docs.uploadStudentDocument));
 router.post('/documents/:id/verify', requirePermission('documents.verify'), asyncHandler(docs.verifyDocument));
 router.delete('/documents/:id', requirePermission('documents.upload'), asyncHandler(docs.deleteDocument));
-router.get('/certificates', asyncHandler(docs.listCertificates));
+router.get('/certificates', requirePermissionOrRole('certificates.view', 'STUDENT'), asyncHandler(docs.listCertificates));
 router.post('/certificates/generate', requirePermission('certificates.generate'), asyncHandler(docs.generateCertificate));
 // ---------- Reports / Settings / Tickets / Audit ----------
-router.get('/reports', asyncHandler(misc.getReports));
-router.post('/reports/export', asyncHandler(misc.createReportExport));
-router.get('/settings', asyncHandler(misc.getSchoolSettings));
+router.get('/reports', requirePermission('reports.view'), asyncHandler(misc.getReports));
+router.post('/reports/export', requirePermission('reports.export'), asyncHandler(misc.createReportExport));
+router.get('/settings', requirePermission('settings.manage'), asyncHandler(misc.getSchoolSettings));
 router.put('/settings', requirePermission('settings.manage'), asyncHandler(misc.updateSchoolSettings));
-router.get('/tickets', asyncHandler(misc.listTickets));
+router.get('/tickets', requirePermission('tickets.view'), asyncHandler(misc.listTickets));
 router.post('/tickets', asyncHandler(misc.createTicket));
-router.patch('/tickets/:id', asyncHandler(misc.updateTicket));
-router.get('/audit-logs', asyncHandler(misc.listAuditLogs));
+router.patch('/tickets/:id', requirePermission('tickets.manage'), asyncHandler(misc.updateTicket));
+router.get('/audit-logs', requirePermission('audit.view'), asyncHandler(misc.listAuditLogs));
 
 // ---------- Users & Permissions ----------
 // All user-management routes are gated behind 'users.manage'. These four were

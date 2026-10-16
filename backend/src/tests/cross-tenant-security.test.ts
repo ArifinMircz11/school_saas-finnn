@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { signAccessToken, verifyAccessToken } from '../utils/jwt';
 import { schoolOf } from '../controllers/student.controller';
-import { requireRole } from '../middleware/auth';
+import { requireRole, requirePermission, requirePermissionOrRole } from '../middleware/auth';
 
 type Result = { name: string; passed: boolean; error?: string };
 
@@ -24,6 +24,32 @@ function runRoleGuard(roles: string[], requiredRole: string) {
     json(value: unknown) { body = value; return this; },
   };
   requireRole(requiredRole)(req, res, () => { nextCalled = true; });
+  return { statusCode, body, nextCalled };
+}
+
+function runPermissionGuard(roles: string[], permissions: string[], requiredPermission: string) {
+  let statusCode = 200;
+  let body: unknown;
+  let nextCalled = false;
+  const req: any = { auth: { roles, permissions } };
+  const res: any = {
+    status(code: number) { statusCode = code; return this; },
+    json(value: unknown) { body = value; return this; },
+  };
+  requirePermission(requiredPermission)(req, res, () => { nextCalled = true; });
+  return { statusCode, body, nextCalled };
+}
+
+function runPermissionOrRoleGuard(roles: string[], permissions: string[], requiredPermission: string, ...allowedRoles: string[]) {
+  let statusCode = 200;
+  let body: unknown;
+  let nextCalled = false;
+  const req: any = { auth: { roles, permissions } };
+  const res: any = {
+    status(code: number) { statusCode = code; return this; },
+    json(value: unknown) { body = value; return this; },
+  };
+  requirePermissionOrRole(requiredPermission, ...allowedRoles)(req, res, () => { nextCalled = true; });
   return { statusCode, body, nextCalled };
 }
 
@@ -79,6 +105,31 @@ export function runRealTenantSecuritySuite(): Result[] {
         () => schoolOf({ auth: { sub: 'platform-admin', schoolId: null, roles: ['SUPER_ADMIN'], permissions: [], type: 'access' } } as any),
         (error: any) => error?.statusCode === 403,
       );
+    }),
+    test('SEC-UNIT-07: permission middleware denies missing permission', () => {
+      const result = runPermissionGuard(['STUDENT'], ['students.view'], 'users.manage');
+      assert.equal(result.statusCode, 403);
+      assert.equal(result.nextCalled, false);
+    }),
+    test('SEC-UNIT-08: permission middleware permits granted permission', () => {
+      const result = runPermissionGuard(['SCHOOL_ADMIN'], ['students.view'], 'students.view');
+      assert.equal(result.statusCode, 200);
+      assert.equal(result.nextCalled, true);
+    }),
+    test('SEC-UNIT-09: SUPER_ADMIN permission bypass remains functional', () => {
+      const result = runPermissionGuard(['SUPER_ADMIN'], [], 'users.manage');
+      assert.equal(result.statusCode, 200);
+      assert.equal(result.nextCalled, true);
+    }),
+    test('SEC-UNIT-10: explicitly allowed self-service role can reach ownership-checked route', () => {
+      const result = runPermissionOrRoleGuard(['STUDENT'], [], 'students.view', 'STUDENT');
+      assert.equal(result.statusCode, 200);
+      assert.equal(result.nextCalled, true);
+    }),
+    test('SEC-UNIT-11: unrelated role cannot use self-service exception', () => {
+      const result = runPermissionOrRoleGuard(['PARENT'], [], 'students.view', 'STUDENT');
+      assert.equal(result.statusCode, 403);
+      assert.equal(result.nextCalled, false);
     }),
   ];
 }

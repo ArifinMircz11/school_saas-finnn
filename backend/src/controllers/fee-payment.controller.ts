@@ -33,30 +33,34 @@ export async function studentFees(req: Request, res: Response) {
   const { studentId, status } = req.query as { studentId?: string; status?: string };
   const schoolId = schoolOf(req);
   const where: any = { schoolId };
-  // STUDENT role: students (and parents using student login) see only their own
-  // fees plus siblings' fees (same guardians).
-  if (req.auth?.roles.includes('STUDENT')) {
-    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub } });
-    if (student) {
-      const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p: any) => p.parentId);
-      const siblingIds = parentIds.length
-        ? (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds } }, select: { studentId: true } })).map((p: any) => p.studentId)
-        : [];
-      const allowedStudentIds = [student.id, ...siblingIds];
-      if (studentId) {
-        if (!allowedStudentIds.includes(studentId)) {
-          throw new ApiError(403, 'Forbidden: cannot access another student fee record');
-        }
-        where.studentId = studentId;
-      } else {
-        where.studentId = { in: allowedStudentIds };
-      }
-    } else {
-      where.studentId = 'none';
+  const roles = req.auth?.roles ?? [];
+
+  if (roles.includes('STUDENT')) {
+    const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId, deletedAt: null }, select: { id: true } });
+    if (!student) throw new ApiError(404, 'Student not found');
+    if (studentId && studentId !== student.id) throw new ApiError(404, 'Student fee not found');
+    where.studentId = student.id;
+  } else if (roles.includes('PARENT')) {
+    const parent = await prisma.parent.findFirst({ where: { userId: req.auth!.sub, schoolId } });
+    if (!parent) throw new ApiError(404, 'Parent record not found');
+    const links = await prisma.studentParent.findMany({
+      where: { parentId: parent.id, student: { schoolId, deletedAt: null } },
+      select: { studentId: true },
+    });
+    const studentIds = links.map((link) => link.studentId);
+    if (!studentIds.length) throw new ApiError(404, 'No linked students found');
+    if (studentId && !studentIds.includes(studentId)) throw new ApiError(404, 'Student fee not found');
+    where.studentId = studentId || { in: studentIds };
+  } else {
+    const hasFeesPermission = roles.includes('SUPER_ADMIN') || (req.auth?.permissions || []).includes('fees.view');
+    if (!hasFeesPermission) throw new ApiError(403, 'Forbidden: missing permission fees.view');
+    if (studentId) {
+      const student = await prisma.student.findFirst({ where: { id: studentId, schoolId, deletedAt: null }, select: { id: true } });
+      if (!student) throw new ApiError(404, 'Student not found');
+      where.studentId = studentId;
     }
-  } else if (studentId) {
-    where.studentId = studentId;
   }
+
   if (status) where.status = status.toUpperCase();
   const fees = await prisma.studentFee.findMany({
     where, include: { structure: { include: { category: true } }, payments: true, student: { select: { id: true, firstName: true, lastName: true, admissionNo: true } } },
