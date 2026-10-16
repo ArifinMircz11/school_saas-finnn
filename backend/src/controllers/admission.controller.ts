@@ -91,9 +91,12 @@ export async function reviewAdmission(req: Request, res: Response) {
 /** Upload a document for an admission application. */
 export async function uploadAdmissionDocument(req: Request, res: Response) {
   if (!req.file) throw new ApiError(400, 'Document file required');
-  const schoolId = schoolOf(req);
-  const admission = await one(schoolId, 'admissions', req.params.id);
-  if (!admission || admission.schoolId !== schoolId) throw new ApiError(404, 'Admission not found');
+  const snapshot = await dbOrThrow().collectionGroup('admissions').where('id', '==', req.params.id).limit(1).get();
+  const admissionDoc = snapshot.docs[0];
+  if (!admissionDoc) throw new ApiError(404, 'Admission not found');
+  const admission = { id: admissionDoc.id, ...admissionDoc.data() } as Doc;
+  const schoolId = String(admission.schoolId || admissionDoc.ref.parent.parent?.id || '');
+  if (!schoolId) throw new ApiError(404, 'Admission not found');
   const url = await uploadToStorage(req.file.path, `admissions/${admission.id}`);
   const id = randomUUID();
   const doc = {
