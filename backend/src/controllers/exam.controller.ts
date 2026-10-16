@@ -78,15 +78,16 @@ export async function studentResults(req: Request, res: Response) {
   const schoolId = schoolOf(req);
   const where: any = { schoolId };
   const isStudentRole = req.auth?.roles.includes('STUDENT');
-  if (isStudentRole && !studentId) {
+  if (isStudentRole) {
     const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId } });
     if (!student) throw new ApiError(404, 'Student not found');
     const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p) => p.parentId);
-    const siblings = parentIds.length ? await prisma.studentParent.findMany({ where: { parentId: { in: parentIds }, student: { schoolId } }, select: { studentId: true } }) : [];
-    where.studentId = { in: [student.id, ...siblings.map((p) => p.studentId).filter((id) => id !== student.id)] };
-  } else if (isStudentRole && studentId) {
-    if (!await prisma.student.findFirst({ where: { id: studentId, schoolId } })) throw new ApiError(404, 'Student not found');
-    where.studentId = studentId;
+    const siblings = parentIds.length
+      ? await prisma.studentParent.findMany({ where: { parentId: { in: parentIds }, student: { schoolId, deletedAt: null } }, select: { studentId: true } })
+      : [];
+    const allowedStudentIds = [student.id, ...siblings.map((p) => p.studentId).filter((id) => id !== student.id)];
+    if (studentId && !allowedStudentIds.includes(studentId)) throw new ApiError(404, 'Student results not found');
+    where.studentId = studentId || { in: allowedStudentIds };
   }
   if (examId) where.examId = examId;
   if (isStudentRole || publishedOnly === 'true') where.published = true;
