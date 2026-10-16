@@ -1,0 +1,33 @@
+name: Main Security and Build Verification
+
+on:
+  push:
+    branches:
+      - fix/main-security-audit-2026-10-16
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  backend-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install workspace dependencies
+        run: npm install
+      - name: Generate Prisma client
+        run: npm --workspace backend run prisma:generate
+      - name: Build backend
+        run: npm --workspace backend run build
+      - name: Run tenant and role security unit tests
+        env:
+          JWT_ACCESS_SECRET: ci-access-secret-for-tests-only
+          JWT_REFRESH_SECRET: ci-refresh-secret-for-tests-only
+        run: npm --workspace backend run test:security
