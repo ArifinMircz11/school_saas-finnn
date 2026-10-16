@@ -14,16 +14,23 @@ export async function createTimetableEntry(req: Request, res: Response) {
   if (!subject || subject.schoolId !== schoolId) throw new ApiError(404, 'Subject not found');
   const teacher = await prisma.teacher.findUnique({ where: { id: body.teacherId } });
   if (!teacher || teacher.schoolId !== schoolId) throw new ApiError(404, 'Teacher not found');
-  // Conflict check: teacher or section already booked at this timeslot.
+  // Reject overlapping bookings for either the teacher or the section.
+  // Times use normalized HH:mm strings, so lexical comparisons preserve time order.
+  if (body.startTime >= body.endTime) {
+    throw new ApiError(400, 'Timetable end time must be later than start time');
+  }
   const conflict = await prisma.timetable.findFirst({
-    where: { schoolId, day: body.day, OR: [
-      { teacherId: body.teacherId, startTime: body.startTime },
-      { sectionId: body.sectionId, startTime: body.startTime },
-    ] },
+    where: {
+      schoolId,
+      day: body.day,
+      startTime: { lt: body.endTime },
+      endTime: { gt: body.startTime },
+      OR: [{ teacherId: body.teacherId }, { sectionId: body.sectionId }],
+    },
+    select: { id: true, teacherId: true, sectionId: true },
   });
   if (conflict) {
-    const entry = await prisma.timetable.create({ data: { schoolId, sectionId: body.sectionId, subjectId: body.subjectId, teacherId: body.teacherId, day: body.day, startTime: body.startTime, endTime: body.endTime } });
-    return created(res, entry, 'Timetable entry created (conflict allowed after warning)');
+    throw new ApiError(409, 'Timetable overlaps an existing booking for this teacher or section');
   }
   const entry = await prisma.timetable.create({ data: { schoolId, sectionId: body.sectionId, subjectId: body.subjectId, teacherId: body.teacherId, day: body.day, startTime: body.startTime, endTime: body.endTime } });
   await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'CREATE_TIMETABLE', module: 'TIMETABLE' });
