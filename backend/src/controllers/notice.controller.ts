@@ -57,10 +57,10 @@ export async function createNotice(req: Request, res: Response) {
 export async function myNotifications(req: Request, res: Response) {
   const userId = req.auth!.sub;
   const { unreadOnly } = req.query as { unreadOnly?: string };
-  let query: any = dbOrThrow().collectionGroup('notifications').where('userId', '==', userId);
-  if (unreadOnly === 'true') query = query.where('read', '==', false);
-  const snapshot = await query.get();
-  const notifications = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }))
+  const snapshot = await dbOrThrow().collectionGroup('notifications').where('userId', '==', userId).get();
+  const notifications = snapshot.docs
+    .filter((doc: any) => unreadOnly !== 'true' || doc.get('read') === false)
+    .map((doc: any) => ({ id: doc.id, ...doc.data() }))
     .sort((a: any, b: any) => millis(b.createdAt) - millis(a.createdAt))
     .slice(0, 100);
   return ok(res, notifications, 'Notifications fetched');
