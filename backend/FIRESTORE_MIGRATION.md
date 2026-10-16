@@ -35,6 +35,18 @@ From `backend/`:
 
 The apply command is repeatable for the same source IDs, but it overwrites matching destination documents. Do not run it against a populated destination until collisions and ownership have been reviewed. It does not clear destination documents absent from PostgreSQL.
 
+## Implementation status (in progress)
+
+The following backend areas have been switched to Firestore reads/writes on the migration branch while retaining their existing REST routes:
+- Login, refresh/logout, account recovery, profile lookup, super-admin bootstrap/impersonation, and user/RBAC persistence
+- Academic sessions, classes, sections, subjects, and role dashboard reads
+- Student records and guardian links
+- Attendance, timetable, homework/submissions, exams/marks/results
+- Fee categories, fee structures, fee assignment, payments, fee reports, and fee notifications
+- Notices, in-app notifications, and audit log writes
+
+This is still a **hybrid migration branch**, not a deployable cutover. Other controllers (including school/subscription/admission/document and principal-related flows) still contain PostgreSQL/Prisma operations, and the process startup still initializes Prisma. Do not merge or deploy this branch as a completed Firestore migration until the remaining Prisma paths are migrated and end-to-end tests cover all five dashboards and their workflows.
+
 ## Completion gates
 
 - Dry run reports all source records accounted for and zero unresolved tenant records.
