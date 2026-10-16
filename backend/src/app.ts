@@ -6,6 +6,7 @@ import config from './config';
 import router from './routes';
 import { errorHandler, notFound } from './utils/response';
 import { apiLimiter } from './middleware/rateLimiter';
+import { requireAuth, requireRole } from './middleware/auth';
 
 export const app = express();
 
@@ -33,7 +34,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.status(200).json({ success: true, status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.get('/api/firestore-health', async (_req: Request, res: Response) => {
+app.get('/api/firestore-health', requireAuth, requireRole('SUPER_ADMIN'), async (_req: Request, res: Response) => {
   const { testFirestoreConnection } = await import('./config/firestore');
   const result = await testFirestoreConnection();
   res.status(result.success ? 200 : 500).json(result);

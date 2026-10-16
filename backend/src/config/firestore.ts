@@ -14,6 +14,7 @@ try {
 }
 
 const projectId = process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId || 'sample-firebase-ai-app-5c298';
+const databaseId = process.env.FIRESTORE_DATABASE_ID || firebaseConfig.firestoreDatabaseId || 'ai-studio-schoolsaasfinnn-5fae9775-87f1-4cd4-9ed0-dadf91c5bce5';
 
 if (!admin.apps || !admin.apps.length) {
   try {
@@ -28,33 +29,35 @@ if (!admin.apps || !admin.apps.length) {
 
 export function getFirestoreInstance() {
   try {
-    if (!admin.apps || admin.apps.length === 0) {
-      admin.initializeApp({ projectId: projectId });
-    }
-    return getFirestore();
+    const app = admin.apps && admin.apps.length > 0 ? admin.apps[0] : admin.initializeApp({ projectId: projectId });
+    return getFirestore(app, databaseId);
   } catch (e: any) {
-    console.warn('Could not get firestore instance:', e?.message || e);
+    console.warn('Could not get firestore instance with databaseId:', databaseId, e?.message || e);
+    try {
+      return getFirestore();
+    } catch (err) {
+      return null;
+    }
   }
-  return null;
 }
 
 export const firestore = getFirestoreInstance();
 
 // Test connection helper
-export async function testFirestoreConnection(): Promise<{ success: boolean; message: string }> {
+export async function testFirestoreConnection(): Promise<{ success: boolean; message: string; databaseId: string }> {
   try {
     const db = getFirestoreInstance();
     if (!db) {
-      return { success: false, message: 'Firestore client not initialized' };
+      return { success: false, message: 'Firestore client not initialized', databaseId };
     }
     const testDocRef = db.collection('_health_check').doc('connection_test');
     await testDocRef.set({ testedAt: new Date().toISOString() }, { merge: true });
     const docSnap = await testDocRef.get();
     if (docSnap.exists) {
-      return { success: true, message: 'Successfully connected to Google Cloud Firestore and verified read/write access.' };
+      return { success: true, message: 'Successfully connected to Google Cloud Firestore and verified read/write access.', databaseId };
     }
-    return { success: false, message: 'Test document write succeeded but read verification failed.' };
+    return { success: false, message: 'Test document write succeeded but read verification failed.', databaseId };
   } catch (error: any) {
-    return { success: false, message: `Firestore connection test failed: ${error?.message || error}` };
+    return { success: false, message: `Firestore connection test failed: ${error?.message || error}`, databaseId };
   }
 }
