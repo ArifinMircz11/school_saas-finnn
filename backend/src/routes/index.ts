@@ -130,20 +130,20 @@ router.post('/notifications/:id/read', asyncHandler(notices.markRead));
 router.post('/notifications/read-all', asyncHandler(notices.markAllRead));
 
 // ---------- Documents & Certificates ----------
-router.get('/documents', asyncHandler(docs.listStudentDocuments));
+router.get('/documents', requirePermission('documents.view'), asyncHandler(docs.listStudentDocuments));
 router.post('/documents/upload', requirePermission('documents.upload'), upload.single('document') as any, asyncHandler(docs.uploadStudentDocument));
 router.post('/documents/:id/verify', requirePermission('documents.verify'), asyncHandler(docs.verifyDocument));
 router.delete('/documents/:id', requirePermission('documents.upload'), asyncHandler(docs.deleteDocument));
-router.get('/certificates', asyncHandler(docs.listCertificates));
+router.get('/certificates', requirePermission('certificates.view'), asyncHandler(docs.listCertificates));
 router.post('/certificates/generate', requirePermission('certificates.generate'), asyncHandler(docs.generateCertificate));
 // ---------- Reports / Settings / Tickets / Audit ----------
-router.get('/reports', asyncHandler(misc.getReports));
+router.get('/reports', requirePermission('reports.view'), asyncHandler(misc.getReports));
 router.post('/reports/export', requirePermission('reports.export'), asyncHandler(misc.createReportExport));
 router.get('/settings', requirePermission('settings.manage'), asyncHandler(misc.getSchoolSettings));
 router.put('/settings', requirePermission('settings.manage'), asyncHandler(misc.updateSchoolSettings));
-router.get('/tickets', asyncHandler(misc.listTickets));
+router.get('/tickets', requirePermission('tickets.view'), asyncHandler(misc.listTickets));
 router.post('/tickets', asyncHandler(misc.createTicket));
-router.patch('/tickets/:id', asyncHandler(misc.updateTicket));
+router.patch('/tickets/:id', requirePermission('tickets.manage'), asyncHandler(misc.updateTicket));
 router.get('/audit-logs', requirePermission('audit.view'), asyncHandler(misc.listAuditLogs));
 
 // ---------- Users & Permissions ----------
