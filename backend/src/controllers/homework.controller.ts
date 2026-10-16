@@ -39,6 +39,19 @@ export async function listHomework(req: Request, res: Response) {
     if (student.sectionId) where.sectionId = student.sectionId;
     else where.sectionId = '__no_section__';
     submissions = { where: { studentId: student.id }, include: { student: true } };
+  } else if (req.auth?.roles.includes('PARENT')) {
+    const parent = await prisma.parent.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
+    if (!parent) throw new ApiError(404, 'Parent record not found');
+    const links = await prisma.studentParent.findMany({
+      where: { parentId: parent.id, student: { schoolId, deletedAt: null } },
+      select: { studentId: true, student: { select: { sectionId: true } } },
+    });
+    if (!links.length) throw new ApiError(404, 'No linked students found');
+    const studentIds = [...new Set(links.map((link) => link.studentId))];
+    const sectionIds = [...new Set(links.map((link) => link.student.sectionId).filter((id): id is string => Boolean(id)))];
+    if (sectionId && !sectionIds.includes(sectionId)) throw new ApiError(404, 'Homework not found');
+    where.sectionId = sectionId || (sectionIds.length ? { in: sectionIds } : '__no_section__');
+    submissions = { where: { studentId: { in: studentIds } }, include: { student: true } };
   } else if (req.auth?.roles.includes('TEACHER')) {
     const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
     if (!teacher) throw new ApiError(404, 'Teacher not found');
