@@ -82,8 +82,8 @@ const collectionSchema = z.enum([
   'feeRecords',
 ]);
 const recordSchema = z.record(z.unknown()).refine(
-  (record) => !('tenantId' in record) && !('id' in record),
-  'tenantId and id are server-managed fields.',
+  (record) => !['tenantId', 'id', 'createdAt', 'updatedAt', 'createdBy'].some((field) => field in record),
+  'tenantId, id, createdAt, updatedAt, and createdBy are server-managed fields.',
 );
 
 app.get('/v1/:collection', requireFirebaseIdentity, async (req: AuthenticatedRequest, res) => {
@@ -106,8 +106,21 @@ app.get('/v1/:collection', requireFirebaseIdentity, async (req: AuthenticatedReq
 app.post('/v1/:collection', requireFirebaseIdentity, async (req: AuthenticatedRequest, res) => {
   const parsedCollection = collectionSchema.safeParse(req.params.collection);
   if (!parsedCollection.success) return res.status(404).json({ error: 'Collection is not exposed by this API.' });
+  const writerRoles: Record<z.infer<typeof collectionSchema>, string[]> = {
+    students: ['SCHOOL_ADMIN'],
+    teachers: ['SCHOOL_ADMIN'],
+    classes: ['SCHOOL_ADMIN', 'PRINCIPAL'],
+    attendance: ['SCHOOL_ADMIN', 'PRINCIPAL', 'TEACHER'],
+    notices: ['SCHOOL_ADMIN', 'PRINCIPAL'],
+    homework: ['SCHOOL_ADMIN', 'PRINCIPAL', 'TEACHER'],
+    exams: ['SCHOOL_ADMIN', 'PRINCIPAL', 'TEACHER'],
+    feeRecords: ['SCHOOL_ADMIN'],
+  };
+  if (!writerRoles[parsedCollection.data].some((role) => req.principal!.roles.includes(role))) {
+    return res.status(403).json({ error: 'Your role cannot create records in this collection.' });
+  }
   const parsedRecord = recordSchema.safeParse(req.body);
-  if (!parsedRecord.success) return res.status(400).json({ error: 'Invalid record. id and tenantId are server-managed.' });
+  if (!parsedRecord.success) return res.status(400).json({ error: 'Invalid record. id, tenantId, and audit fields are server-managed.' });
 
   try {
     const now = new Date().toISOString();
