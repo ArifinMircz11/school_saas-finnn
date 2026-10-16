@@ -7,6 +7,11 @@ import { schoolOf } from './student.controller';
 import { uploadToStorage } from '../middleware/upload';
 import { admissionSchema } from '../validators';
 import crypto from 'crypto';
+import config from '../config';
+
+function admissionUploadToken(admissionId: string): string {
+  return crypto.createHmac('sha256', config.jwt.accessSecret).update('admission-upload:' + admissionId).digest('hex');
+}
 
 /** Public admission form - allows anyone to apply to an active school. */
 export async function submitAdmission(req: Request, res: Response) {
@@ -25,7 +30,7 @@ export async function submitAdmission(req: Request, res: Response) {
       parentName: body.parentName, parentEmail: body.parentEmail, parentPhone: body.parentPhone,
     },
   });
-  return created(res, { applicationNo: admission.applicationNo, id: admission.id }, 'Admission submitted');
+  return created(res, { applicationNo: admission.applicationNo, id: admission.id, uploadToken: admissionUploadToken(admission.id) }, 'Admission submitted');
 }
 
 export async function listAdmissions(req: Request, res: Response) {
@@ -62,6 +67,13 @@ export async function reviewAdmission(req: Request, res: Response) {
 /** Upload a document for an admission application. */
 export async function uploadAdmissionDocument(req: Request, res: Response) {
   if (!req.file) throw new ApiError(400, 'Document file required');
+  const suppliedToken = typeof req.body?.uploadToken === 'string' ? req.body.uploadToken : '';
+  const expectedToken = admissionUploadToken(req.params.id);
+  const supplied = Buffer.from(suppliedToken);
+  const expected = Buffer.from(expectedToken);
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+    throw new ApiError(403, 'Valid admission upload token required');
+  }
   const admission = await prisma.admission.findUnique({ where: { id: req.params.id } });
   if (!admission) throw new ApiError(404, 'Admission not found');
   const url = await uploadToStorage(req.file.path, `admissions/${admission.id}`);
