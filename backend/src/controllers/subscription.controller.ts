@@ -64,9 +64,12 @@ export async function createPlan(req: Request, res: Response) {
 
 export async function updatePlan(req: Request, res: Response) {
   const body = planSchema.parse(req.body);
-  const ref = dbOrThrow().collection('system_subscriptionPlans').doc(req.params.id);
+  const db = dbOrThrow();
+  const ref = db.collection('system_subscriptionPlans').doc(req.params.id);
   const snapshot = await ref.get();
   if (!snapshot.exists) throw new ApiError(404, 'Plan not found');
+  const duplicate = await db.collection('system_subscriptionPlans').where('code', '==', body.code).get();
+  if (duplicate.docs.some((doc) => doc.id !== req.params.id)) throw new ApiError(409, 'Plan code already exists');
   const patch = {
     name: body.name, code: body.code, price: String(body.price), period: body.period,
     maxStudents: body.maxStudents, maxTeachers: body.maxTeachers, maxAdmins: body.maxAdmins,
