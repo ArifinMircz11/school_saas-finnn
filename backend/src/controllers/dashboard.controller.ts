@@ -1,37 +1,105 @@
 import { Request, Response } from 'express';
-import { prisma } from '../config/database';
+import { getFirestoreInstance } from '../config/firestore';
 import { ok } from '../utils/response';
 
-/** Shared dashboard summaries, branched by role. All queries are tenant-scoped. */
+type Doc = Record<string, any>;
+
+function dbOrThrow() {
+  const db = getFirestoreInstance();
+  if (!db) throw new Error('Firestore is not configured');
+  return db;
+}
+
+function collection(schoolId: string, name: string) {
+  return dbOrThrow().collection('schools').doc(schoolId).collection(name);
+}
+
+async function all(schoolId: string, name: string): Promise<Doc[]> {
+  const snapshot = await collection(schoolId, name).get();
+  return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+}
+
+async function one(schoolId: string, name: string, id?: string | null): Promise<Doc | null> {
+  if (!id) return null;
+  const snapshot = await collection(schoolId, name).doc(id).get();
+  return snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null;
+}
+
+function time(value: any): number {
+  if (value instanceof Date) return value.getTime();
+  if (value && typeof value.toDate === 'function') return value.toDate().getTime();
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function within(value: any, start: Date, end: Date): boolean {
+  const timestamp = time(value);
+  return timestamp >= start.getTime() && timestamp < end.getTime();
+}
+
+async function hydrateStudent(schoolId: string, student: Doc): Promise<Doc> {
+  const [cls, section, attendance, fees] = await Promise.all([
+    one(schoolId, 'classes', student.classId),
+    one(schoolId, 'sections', student.sectionId),
+    all(schoolId, 'attendances'),
+    all(schoolId, 'studentFees'),
+  ]);
+  const recentAttendance = attendance.filter((item) => item.studentId === student.id)
+    .sort((a, b) => time(b.date) - time(a.date)).slice(0, 30);
+  const ownFees = await Promise.all(fees.filter((fee) => fee.studentId === student.id).map(async (fee) => ({
+    ...fee,
+    structure: await one(schoolId, 'feeStructures', fee.structureId),
+  })));
+  return { ...student, class: cls, section, attendance: recentAttendance, fees: ownFees };
+}
+
+async function guardiansForStudent(schoolId: string, studentId: string): Promise<Doc[]> {
+  const [links, parents] = await Promise.all([all(schoolId, 'studentParents'), all(schoolId, 'parents')]);
+  return links.filter((link) => link.studentId === studentId).map((link) => {
+    const parent = parents.find((item) => item.id === link.parentId);
+    return parent ? {
+      id: parent.id, firstName: parent.firstName, lastName: parent.lastName,
+      phone: parent.phone, relationship: link.relationship,
+    } : null;
+  }).filter((item): item is Doc => item !== null);
+}
+
+/** Shared dashboard summaries, branched by role. All reads are tenant-scoped. */
 export async function getDashboard(req: Request, res: Response) {
   const roles = req.auth!.roles;
   const schoolId = req.auth!.schoolId;
   if (!schoolId) {
-    if (roles.includes('SUPER_ADMIN')) {
-      return ok(res, { role: 'SUPER_ADMIN' }, 'Dashboard');
-    }
+    if (roles.includes('SUPER_ADMIN')) return ok(res, { role: 'SUPER_ADMIN' }, 'Dashboard');
     return ok(res, { role: roles[0], data: {} }, 'Dashboard');
   }
 
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
-
-  const totalStudents = await prisma.student.count({ where: { schoolId, deletedAt: null } });
-  const totalTeachers = await prisma.teacher.count({ where: { schoolId } });
-  const totalParents = await prisma.parent.count({ where: { schoolId } });
+  const [students, teachers, parents, attendanceRows, feePayments, studentFees, admissions, documents] = await Promise.all([
+    all(schoolId, 'students'), all(schoolId, 'teachers'), all(schoolId, 'parents'),
+    all(schoolId, 'attendances'), all(schoolId, 'feePayments'), all(schoolId, 'studentFees'),
+    all(schoolId, 'admissions'), all(schoolId, 'studentDocuments'),
+  ]);
+  const activeStudents = students.filter((student) => student.deletedAt == null);
+  const totalStudents = activeStudents.length;
+  const totalTeachers = teachers.length;
+  const totalParents = parents.length;
 
   if (roles.includes('SCHOOL_ADMIN')) {
-    const todayAttendance = await prisma.attendance.count({ where: { schoolId, date: { gte: today, lt: tomorrow } } });
-    const todayFees = await prisma.feePayment.aggregate({ where: { schoolId, paidAt: { gte: today, lt: tomorrow } }, _sum: { amount: true } });
-    const pendingAgg = await prisma.studentFee.aggregate({ where: { schoolId, status: { in: ['PENDING', 'PARTIAL'] } }, _sum: { totalAmount: true, paidAmount: true } });
-    const newAdmissions = await prisma.admission.count({ where: { schoolId, createdAt: { gte: today, lt: tomorrow } } });
-    const pendingDocuments = await prisma.studentDocument.count({ where: { schoolId, verified: false } });
+    const todayAttendance = attendanceRows.filter((row) => within(row.date, today, tomorrow)).length;
+    const todayFees = feePayments.filter((row) => within(row.paidAt, today, tomorrow))
+      .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const pending = studentFees.filter((row) => ['PENDING', 'PARTIAL'].includes(row.status));
+    const pendingTotal = pending.reduce((sum, row) => sum + Number(row.totalAmount || 0), 0);
+    const pendingPaid = pending.reduce((sum, row) => sum + Number(row.paidAmount || 0), 0);
+    const newAdmissions = admissions.filter((row) => within(row.createdAt, today, tomorrow)).length;
+    const pendingDocuments = documents.filter((row) => row.verified === false).length;
     return ok(res, {
       role: 'SCHOOL_ADMIN',
       data: {
         totalStudents, totalTeachers, totalParents, todayAttendance,
-        todayFeeCollection: Number(todayFees._sum.amount || 0),
-        pendingFeesAmount: Number(pendingAgg._sum.totalAmount || 0) - Number(pendingAgg._sum.paidAmount || 0),
+        todayFeeCollection: todayFees,
+        pendingFeesAmount: pendingTotal - pendingPaid,
         newAdmissions,
         pendingDocuments,
       },
@@ -39,91 +107,81 @@ export async function getDashboard(req: Request, res: Response) {
   }
 
   if (roles.includes('TEACHER')) {
-    const teacher = await prisma.teacher.findFirst({
-      where: { userId: req.auth!.sub },
-      include: { sections: { include: { section: { include: { _count: { select: { students: true } } } } } }, subjects: { include: { subject: true } } },
-    });
-    const todayClasses = await prisma.timetable.count({ where: { schoolId, teacherId: teacher?.id, day: new Date().toLocaleDateString('en-US', { weekday: 'long' }).toUpperCase() } });
-    const myHomework = await prisma.homework.count({ where: { schoolId, teacherId: teacher?.id } });
-    const sectionIds = teacher?.sections.map((s) => s.sectionId) || [];
-    const studentCount = await prisma.student.count({ where: { schoolId, sectionId: { in: sectionIds }, deletedAt: null } });
-    return ok(res, { role: 'TEACHER', data: { teacher, todayClasses, pendingHomework: myHomework, totalStudents: studentCount } }, 'Dashboard');
+    const teacher = teachers.find((item) => item.userId === req.auth!.sub) || null;
+    const [teacherSections, teacherSubjects, timetables, homework] = await Promise.all([
+      all(schoolId, 'teacherSections'), all(schoolId, 'teacherSubjects'),
+      all(schoolId, 'timetables'), all(schoolId, 'homeworks'),
+    ]);
+    const sectionLinks = teacherSections.filter((link) => link.teacherId === teacher?.id);
+    const subjectLinks = teacherSubjects.filter((link) => link.teacherId === teacher?.id);
+    const sections = await Promise.all(sectionLinks.map(async (link) => {
+      const section = await one(schoolId, 'sections', link.sectionId);
+      const sectionStudents = students.filter((student) => student.sectionId === link.sectionId);
+      return section ? { ...link, section: { ...section, _count: { students: sectionStudents.length } } } : null;
+    }));
+    const subjects = await Promise.all(subjectLinks.map(async (link) => ({
+      ...link, subject: await one(schoolId, 'subjects', link.subjectId),
+    })));
+    const teacherWithRelations = teacher ? { ...teacher, sections: sections.filter(Boolean), subjects } : null;
+    const todayName = new Date().toLocaleDateString('en-US', { weekday: 'long' }).toUpperCase();
+    const todayClasses = timetables.filter((item) => item.teacherId === teacher?.id && item.day === todayName).length;
+    const myHomework = homework.filter((item) => item.teacherId === teacher?.id).length;
+    const sectionIds = sectionLinks.map((link) => link.sectionId);
+    const studentCount = activeStudents.filter((student) => sectionIds.includes(student.sectionId)).length;
+    return ok(res, { role: 'TEACHER', data: { teacher: teacherWithRelations, todayClasses, pendingHomework: myHomework, totalStudents: studentCount } }, 'Dashboard');
   }
 
   if (roles.includes('STUDENT') || roles.includes('PARENT')) {
-    // Unified payload for students AND parents
-    let student = await prisma.student.findFirst({
-      where: { userId: req.auth!.sub },
-      include: { class: true, section: true, attendance: { take: 30, orderBy: { date: 'desc' } }, fees: { include: { structure: true } } },
-    });
+    const [studentRows, studentParentLinks, notificationRows, homeworkRows] = await Promise.all([
+      Promise.resolve(students),
+      all(schoolId, 'studentParents'),
+      all(schoolId, 'notifications'),
+      all(schoolId, 'homeworks'),
+    ]);
+    let studentRow = studentRows.find((item) => item.userId === req.auth!.sub) || null;
+    let student: Doc | null = studentRow ? await hydrateStudent(schoolId, studentRow) : null;
+    let siblings: Doc[] = [];
 
-    let siblings: any[] = [];
-
-    // If account has PARENT role and no direct Student record, query via Parent -> StudentParent
     if (!student && roles.includes('PARENT')) {
-      const parentRecord = await prisma.parent.findFirst({ where: { userId: req.auth!.sub } });
+      const parentRecord = parents.find((item) => item.userId === req.auth!.sub);
       if (parentRecord) {
-        const studentLinks = await prisma.studentParent.findMany({
-          where: { parentId: parentRecord.id },
-          include: { student: { include: { class: true, section: true, attendance: { take: 30, orderBy: { date: 'desc' } }, fees: { include: { structure: true } } } } },
-        });
-        if (studentLinks.length > 0) {
-          student = studentLinks[0].student;
-          siblings = studentLinks.slice(1).map((link: any) => link.student);
+        const linked = studentParentLinks.filter((link) => link.parentId === parentRecord.id);
+        const childRows = linked.map((link) => students.find((item) => item.id === link.studentId)).filter((item): item is Doc => Boolean(item));
+        const hydrated = await Promise.all(childRows.map((item) => hydrateStudent(schoolId, item)));
+        if (hydrated.length) {
+          student = hydrated[0];
+          siblings = hydrated.slice(1);
         }
       }
     }
 
-    // Guardians of this student (data-only records — no login accounts).
-    const guardians = student
-      ? (await prisma.studentParent.findMany({ where: { studentId: student.id }, include: { parent: true } })).map((g) => ({
-          id: g.parent.id,
-          firstName: g.parent.firstName,
-          lastName: g.parent.lastName,
-          phone: g.parent.phone,
-          relationship: g.relationship,
-        }))
-      : [];
-
-    // Siblings for student accounts (sharing guardians in same school)
+    const guardians = student ? await guardiansForStudent(schoolId, student.id) : [];
     if (student && siblings.length === 0) {
-      const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p) => p.parentId);
-      if (parentIds.length) {
-        const siblingLinkIds = (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds } }, select: { studentId: true } }))
-          .map((p) => p.studentId)
-          .filter((id) => id !== student?.id);
-        siblings = siblingLinkIds.length
-          ? await prisma.student.findMany({
-              where: { id: { in: siblingLinkIds }, schoolId, deletedAt: null },
-              include: { class: true, section: true, attendance: { take: 30, orderBy: { date: 'desc' } }, fees: { include: { structure: true } } },
-            })
-          : [];
-      }
+      const parentIds = studentParentLinks.filter((link) => link.studentId === student!.id).map((link) => link.parentId);
+      const siblingIds = [...new Set(studentParentLinks.filter((link) => parentIds.includes(link.parentId))
+        .map((link) => link.studentId).filter((id) => id !== student!.id))];
+      const siblingRows = siblingIds.map((id) => students.find((item) => item.id === id && item.deletedAt == null))
+        .filter((item): item is Doc => Boolean(item));
+      siblings = await Promise.all(siblingRows.map((item) => hydrateStudent(schoolId, item)));
     }
 
-    const homeworkCount = await prisma.homework.count({ where: { schoolId, sectionId: student?.sectionId, published: true } });
+    const homeworkCount = homeworkRows.filter((item) => item.sectionId === student?.sectionId && item.published === true).length;
     const attendance = student?.attendance || [];
-    const pct = attendance.length ? Math.round((attendance.filter((a) => a.status === 'PRESENT').length / attendance.length) * 100) : 0;
-    const unread = await prisma.notification.count({ where: { userId: req.auth!.sub, read: false } });
+    const attendancePct = attendance.length
+      ? Math.round((attendance.filter((item: Doc) => item.status === 'PRESENT').length / attendance.length) * 100)
+      : 0;
+    const unread = notificationRows.filter((item) => item.userId === req.auth!.sub && item.read === false).length;
     const reportAnalysis = await buildReportAnalysis(schoolId, student?.id);
-
     const allChildren = [
       ...(student ? [{ student, guardians, reportAnalysis }] : []),
-      ...siblings.map((s) => ({ student: s, guardians: [], reportAnalysis: null })),
+      ...siblings.map((item) => ({ student: item, guardians: [], reportAnalysis: null })),
     ];
 
     return ok(res, {
       role: 'STUDENT',
       data: {
-        children: allChildren,
-        unread,
-        student,
-        parents: guardians,
-        reportAnalysis,
-        siblings: siblings.length,
-        fees: student?.fees || [],
-        homeworkPending: homeworkCount,
-        attendancePct: pct,
+        children: allChildren, unread, student, parents: guardians, reportAnalysis,
+        siblings: siblings.length, fees: student?.fees || [], homeworkPending: homeworkCount, attendancePct,
       },
     }, 'Dashboard');
   }
@@ -134,36 +192,49 @@ export async function getDashboard(req: Request, res: Response) {
 /** Aggregate published exam results into subject averages, overall average and trend. */
 async function buildReportAnalysis(schoolId: string, studentId?: string | null) {
   if (!studentId) return null;
-  const results = await prisma.examResult.findMany({
-    where: { schoolId, studentId, published: true },
-    include: { examSubject: { include: { subject: { select: { id: true, name: true } }, exam: { select: { name: true } } } } },
-    orderBy: { exam: { endDate: 'desc' } },
-  });
-  if (!results.length) return null;
+  const [results, examSubjects, subjects, exams] = await Promise.all([
+    all(schoolId, 'examResults'), all(schoolId, 'examSubjects'),
+    all(schoolId, 'subjects'), all(schoolId, 'exams'),
+  ]);
+  const published = results.filter((item) => item.studentId === studentId && item.published === true);
+  if (!published.length) return null;
 
-  const subjMap: Record<string, { name: string; marks: number; max: number }> = {};
-  for (const r of results) {
-    const key = r.examSubject?.subject?.id ?? 'unknown';
-    if (!subjMap[key]) subjMap[key] = { name: r.examSubject?.subject?.name ?? 'Unknown', marks: 0, max: 0 };
-    subjMap[key].marks += Number(r.marksObtained);
-    subjMap[key].max += Number(r.examSubject?.maxMarks ?? 0);
+  const hydrated = published.map((result) => {
+    const examSubject = examSubjects.find((item) => item.id === result.examSubjectId) || null;
+    return {
+      ...result,
+      examSubject: examSubject ? {
+        ...examSubject,
+        subject: subjects.find((item) => item.id === examSubject.subjectId) ? {
+          id: examSubject.subjectId,
+          name: subjects.find((item) => item.id === examSubject.subjectId)!.name,
+        } : null,
+        exam: exams.find((item) => item.id === examSubject.examId) ? {
+          name: exams.find((item) => item.id === examSubject.examId)!.name,
+          endDate: exams.find((item) => item.id === examSubject.examId)!.endDate,
+        } : null,
+      } : null,
+    };
+  }).sort((a, b) => time(b.examSubject?.exam?.endDate) - time(a.examSubject?.exam?.endDate));
+
+  const subjectMap: Record<string, { name: string; marks: number; max: number }> = {};
+  for (const result of hydrated) {
+    const key = result.examSubject?.subject?.id ?? 'unknown';
+    if (!subjectMap[key]) subjectMap[key] = { name: result.examSubject?.subject?.name ?? 'Unknown', marks: 0, max: 0 };
+    subjectMap[key].marks += Number(result.marksObtained);
+    subjectMap[key].max += Number(result.examSubject?.maxMarks ?? 0);
   }
-  const subjectAverages = Object.values(subjMap).map((s) => ({
-    name: s.name,
-    average: s.max ? Number(((s.marks / s.max) * 100).toFixed(1)) : 0,
+  const subjectAverages = Object.values(subjectMap).map((item) => ({
+    name: item.name, average: item.max ? Number(((item.marks / item.max) * 100).toFixed(1)) : 0,
   }));
-
-  const totalMarks = results.reduce((sum, r) => sum + Number(r.marksObtained), 0);
-  const totalMax = results.reduce((sum, r) => sum + Number(r.examSubject?.maxMarks ?? 0), 0);
+  const totalMarks = hydrated.reduce((sum, item) => sum + Number(item.marksObtained), 0);
+  const totalMax = hydrated.reduce((sum, item) => sum + Number(item.examSubject?.maxMarks ?? 0), 0);
   const overallAverage = totalMax ? Number(((totalMarks / totalMax) * 100).toFixed(1)) : 0;
-
-  // Exam names ordered oldest → newest for the trend label.
   const seen: string[] = [];
-  for (const r of [...results].reverse()) {
-    const name = r.examSubject?.exam?.name ?? '';
+  for (const result of [...hydrated].reverse()) {
+    const name = result.examSubject?.exam?.name ?? '';
     if (name && !seen.includes(name)) seen.push(name);
   }
   const examTrend = seen.length > 1 ? `${seen[0]} → ${seen[seen.length - 1]}` : seen[0] || 'No data';
-
-  return { subjectAverages, overallAverage, examTrend, totalExams: results.length };
+  return { subjectAverages, overallAverage, examTrend, totalExams: hydrated.length };
 }
