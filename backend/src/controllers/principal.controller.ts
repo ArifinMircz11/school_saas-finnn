@@ -351,10 +351,13 @@ export async function academicPerformance(req: Request, res: Response) {
     all(schoolId, 'examSubjects'), all(schoolId, 'exams'), all(schoolId, 'subjects'),
     all(schoolId, 'students'), all(schoolId, 'classes'), all(schoolId, 'examResults'),
   ]);
-  const subjectRows = examSubjects.map((item) => ({
-    ...item, exam: exams.find((exam) => exam.id === item.examId),
+  const subjectRows: Doc[] = examSubjects.map((item: Doc): Doc => ({
+    ...item,
+    exam: exams.find((exam) => exam.id === item.examId),
     subject: subjects.find((subject) => subject.id === item.subjectId),
-  })).filter((item) => item.exam && item.subject && (!examId || item.exam.id === examId) && (!subjectId || item.subject.id === subjectId));
+  })).filter((item: Doc) => item.exam && item.subject
+    && (!examId || item.exam.id === examId)
+    && (!subjectId || item.subject.id === subjectId));
   const maxMap = new Map(subjectRows.map((item) => [item.id, Number(item.maxMarks) || 1]));
   const passMap = new Map(subjectRows.map((item) => [item.id, Number(item.passMarks) || 0]));
   const subjectNameMap = new Map(subjectRows.map((item) => [item.id, item.subject.name]));
