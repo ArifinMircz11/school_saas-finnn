@@ -40,7 +40,7 @@ export async function getDashboard(req: Request, res: Response) {
 
   if (roles.includes('TEACHER')) {
     const teacher = await prisma.teacher.findFirst({
-      where: { userId: req.auth!.sub, schoolId },
+      where: { userId: req.auth!.sub, schoolId, deletedAt: null },
       include: { sections: { include: { section: { include: { _count: { select: { students: true } } } } } }, subjects: { include: { subject: true } } },
     });
     const todayClasses = await prisma.timetable.count({ where: { schoolId, teacherId: teacher?.id, day: new Date().toLocaleDateString('en-US', { weekday: 'long' }).toUpperCase() } });
@@ -53,7 +53,7 @@ export async function getDashboard(req: Request, res: Response) {
   if (roles.includes('STUDENT') || roles.includes('PARENT')) {
     // Unified payload for students AND parents
     let student = await prisma.student.findFirst({
-      where: { userId: req.auth!.sub, schoolId },
+      where: { userId: req.auth!.sub, schoolId, deletedAt: null },
       include: { class: true, section: true, attendance: { take: 30, orderBy: { date: 'desc' } }, fees: { include: { structure: true } } },
     });
 
