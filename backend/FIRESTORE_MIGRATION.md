@@ -45,7 +45,9 @@ The following backend areas have been switched to Firestore reads/writes on the 
 - Fee categories, fee structures, fee assignment, payments, fee reports, and fee notifications
 - Notices, in-app notifications, and audit log writes
 
-This is still a **hybrid migration branch**, not a deployable cutover. Other controllers (including school/subscription/admission/document and principal-related flows) still contain PostgreSQL/Prisma operations, and the process startup still initializes Prisma. Do not merge or deploy this branch as a completed Firestore migration until the remaining Prisma paths are migrated and end-to-end tests cover all five dashboards and their workflows.
+The backend route controllers have been switched to Firestore, including school/subscription/admission/document/principal flows. API startup and the readiness endpoint now probe Firestore rather than connecting to PostgreSQL. Prisma remains installed only to read the source PostgreSQL database during migration and to support legacy seed/schema tooling.
+
+The code change is **not yet a verified production cutover**. No live data migration has been run, and no end-to-end test against the configured production Firestore database has been completed. Do not merge/deploy as production-ready until the dry-run is reviewed, data is copied and reconciled, and all five dashboards plus create/update/review/payment/auth flows pass integration tests.
 
 ## Completion gates
 
