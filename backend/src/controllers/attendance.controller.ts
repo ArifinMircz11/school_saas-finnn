@@ -10,21 +10,43 @@ export async function markAttendance(req: Request, res: Response) {
   const body = markAttendanceSchema.parse(req.body);
   const schoolId = schoolOf(req);
   const date = new Date(body.date);
+  if (Number.isNaN(date.getTime())) throw new ApiError(400, 'Invalid attendance date');
   date.setHours(0, 0, 0, 0);
-  let count = 0;
-  for (const rec of body.records) {
-    const student = await prisma.student.findUnique({ where: { id: rec.studentId } });
-    if (!student || student.schoolId !== schoolId) continue;
-    const existing = await prisma.attendance.findUnique({ where: { studentId_date: { studentId: rec.studentId, date } } });
-    if (existing) {
-      await prisma.attendance.update({ where: { id: existing.id }, data: { status: rec.status, remarks: rec.remarks, markedBy: req.auth?.sub } });
-    } else {
-      await prisma.attendance.create({ data: { schoolId, studentId: rec.studentId, date, status: rec.status, remarks: rec.remarks, markedBy: req.auth?.sub } });
+  const studentIds = body.records.map((record) => record.studentId);
+  if (new Set(studentIds).size !== studentIds.length) throw new ApiError(400, 'Duplicate student IDs are not allowed in one attendance batch');
+  if (!studentIds.length) return ok(res, { marked: 0 }, 'No attendance records to mark');
+
+  const students = await prisma.student.findMany({
+    where: { id: { in: studentIds }, schoolId, deletedAt: null },
+    select: { id: true, sectionId: true },
+  });
+  if (students.length !== studentIds.length) throw new ApiError(404, 'One or more students were not found in this school');
+
+  if (req.auth?.roles.includes('TEACHER')) {
+    const teacher = await prisma.teacher.findFirst({
+      where: { userId: req.auth.sub, schoolId },
+      include: { sections: { select: { sectionId: true } } },
+    });
+    if (!teacher) throw new ApiError(403, 'Teacher account required');
+    const allowedSectionIds = new Set(teacher.sections.map((item) => item.sectionId));
+    if (students.some((student) => !student.sectionId || !allowedSectionIds.has(student.sectionId))) {
+      throw new ApiError(403, 'Teachers may only mark attendance for their assigned sections');
     }
-    count++;
   }
-  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'MARK_ATTENDANCE', module: 'ATTENDANCE', details: { date: body.date, count } });
-  return ok(res, { marked: count }, 'Attendance marked');
+
+  await prisma.$transaction(async (tx) => {
+    for (const record of body.records) {
+      const existing = await tx.attendance.findUnique({ where: { studentId_date: { studentId: record.studentId, date } } });
+      if (existing) {
+        if (existing.schoolId !== schoolId) throw new ApiError(404, 'Attendance record not found');
+        await tx.attendance.update({ where: { id: existing.id }, data: { status: record.status, remarks: record.remarks, markedBy: req.auth?.sub } });
+      } else {
+        await tx.attendance.create({ data: { schoolId, studentId: record.studentId, date, status: record.status, remarks: record.remarks, markedBy: req.auth?.sub } });
+      }
+    }
+  });
+  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'MARK_ATTENDANCE', module: 'ATTENDANCE', details: { date: body.date, count: body.records.length } });
+  return ok(res, { marked: body.records.length }, 'Attendance marked');
 }
 
 export async function getAttendance(req: Request, res: Response) {
