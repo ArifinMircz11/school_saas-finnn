@@ -103,13 +103,12 @@ export async function listCertificates(req: Request, res: Response) {
   if (isStudentRole && !studentId) {
     // Students see their own certificates (and siblings' via shared guardians).
     const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId } });
-    if (student) {
-      const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p) => p.parentId);
-      const siblingIds = parentIds.length
-        ? (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds } }, select: { studentId: true } })).map((p) => p.studentId)
-        : [];
-      where.studentId = { in: [student.id, ...siblingIds] };
-    }
+    if (!student) throw new ApiError(404, 'Student not found');
+    const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p) => p.parentId);
+    const siblingIds = parentIds.length
+      ? (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds }, student: { schoolId } }, select: { studentId: true } })).map((p) => p.studentId)
+      : [];
+    where.studentId = { in: [student.id, ...siblingIds] };
   }
   const certs = await prisma.certificate.findMany({ where, include: { student: true }, orderBy: { issuedAt: 'desc' } });
   return ok(res, certs, 'Certificates fetched');
