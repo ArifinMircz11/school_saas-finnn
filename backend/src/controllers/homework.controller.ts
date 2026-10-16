@@ -31,8 +31,20 @@ export async function listHomework(req: Request, res: Response) {
   const schoolId = schoolOf(req);
   const { sectionId } = req.query as { sectionId?: string };
   const where: any = { schoolId, published: true };
-  if (sectionId) where.sectionId = sectionId;
-  const homework = await prisma.homework.findMany({ where, include: { subject: true, teacher: true, section: true, submissions: { include: { student: true } } }, orderBy: { createdAt: 'desc' } });
+  let submissions: any = { include: { student: true } };
+  if (req.auth?.roles.includes('STUDENT')) {
+    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true, sectionId: true } });
+    if (!student) throw new ApiError(404, 'Student not found');
+    if (sectionId && sectionId !== student.sectionId) throw new ApiError(404, 'Homework not found');
+    if (student.sectionId) where.sectionId = student.sectionId;
+    else where.sectionId = '__no_section__';
+    submissions = { where: { studentId: student.id }, include: { student: true } };
+  } else if (sectionId) {
+    const section = await prisma.section.findFirst({ where: { id: sectionId, schoolId }, select: { id: true } });
+    if (!section) throw new ApiError(404, 'Section not found');
+    where.sectionId = sectionId;
+  }
+  const homework = await prisma.homework.findMany({ where, include: { subject: true, teacher: true, section: true, submissions }, orderBy: { createdAt: 'desc' } });
   return ok(res, homework, 'Homework fetched');
 }
 
