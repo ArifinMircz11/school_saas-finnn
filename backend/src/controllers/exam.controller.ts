@@ -36,7 +36,7 @@ export async function listMarks(req: Request, res: Response) {
   if (examId) where.examId = examId;
   if (examSubjectId) where.examSubjectId = examSubjectId;
   if (req.auth?.roles.includes('STUDENT')) {
-    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
+    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId, deletedAt: null }, select: { id: true } });
     if (!student) throw new ApiError(404, 'Student not found');
     where.studentId = student.id;
     where.published = true;
@@ -79,7 +79,7 @@ export async function studentResults(req: Request, res: Response) {
   const where: any = { schoolId };
   const isStudentRole = req.auth?.roles.includes('STUDENT');
   if (isStudentRole) {
-    const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId } });
+    const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId, deletedAt: null } });
     if (!student) throw new ApiError(404, 'Student not found');
     const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p) => p.parentId);
     const siblings = parentIds.length
