@@ -92,6 +92,19 @@ export function requirePermission(permission: string) {
   };
 }
 
+/** Allow a limited self-service role through a route whose controller enforces record ownership. */
+export function requirePermissionOrRole(permission: string, ...allowedRoles: string[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const roles = req.auth?.roles ?? [];
+    const hasPermission = roles.includes('SUPER_ADMIN') || (req.auth?.permissions ?? []).includes(permission);
+    const hasAllowedRole = roles.some((role) => allowedRoles.includes(role));
+    if (!hasPermission && !hasAllowedRole) {
+      return res.status(403).json({ success: false, message: `Forbidden: missing permission ${permission}` });
+    }
+    next();
+  };
+}
+
 // NOTE: There is intentionally NO requireSameSchool() middleware. Tenant isolation
 // is enforced inside every controller via schoolOf(req), which reads the school id
 // from the trusted JWT (set at login from the DB, never from the client), and each
