@@ -47,7 +47,7 @@ export async function reviewAdmission(req: Request, res: Response) {
   if (!['APPROVED', 'REJECTED'].includes(status)) throw new ApiError(400, 'Status must be APPROVED or REJECTED');
   const admission = await prisma.admission.findFirst({ where: { id: req.params.id, schoolId }, include: { documents: true } });
   if (!admission) throw new ApiError(404, 'Admission not found');
-  if (admission.status !== 'PENDING') throw new ApiError(409, 'Only pending admissions can be reviewed');
+  if (!['PENDING', 'SUBMITTED'].includes(admission.status)) throw new ApiError(409, 'Only pending admissions can be reviewed');
 
   if (status === 'APPROVED') {
     const result = await convertAdmissionToStudent(admission);
@@ -56,7 +56,7 @@ export async function reviewAdmission(req: Request, res: Response) {
   }
 
   const updated = await prisma.admission.updateMany({
-    where: { id: admission.id, schoolId, status: 'PENDING' },
+    where: { id: admission.id, schoolId, status: { in: ['PENDING', 'SUBMITTED'] } },
     data: { status: 'REJECTED' },
   });
   if (updated.count !== 1) throw new ApiError(409, 'Admission was already reviewed');
@@ -92,7 +92,7 @@ async function convertAdmissionToStudent(admission: any) {
 
   const result = await prisma.$transaction(async (tx) => {
     const claimed = await tx.admission.updateMany({
-      where: { id: admission.id, schoolId, status: 'PENDING' },
+      where: { id: admission.id, schoolId, status: { in: ['PENDING', 'SUBMITTED'] } },
       data: { status: 'PROCESSING' },
     });
     if (claimed.count !== 1) throw new ApiError(409, 'Admission was already reviewed');
