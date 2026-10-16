@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAuth, requireRole, requirePermission } from '../middleware/auth';
+import { requireAuth, requireRole, requirePermission, requirePermissionOrRole } from '../middleware/auth';
 import { authLimiter, publicLimiter } from '../middleware/rateLimiter';
 import { asyncHandler } from '../utils/asyncHandler';
 import { upload } from '../middleware/upload';
@@ -70,8 +70,8 @@ router.get('/academic/subjects', asyncHandler(academic.listSubjects));
 router.post('/academic/subjects', requirePermission('academic.manage'), asyncHandler(academic.createSubject));
 
 // ---------- Students / Parents / Teachers / Staff ----------
-router.get('/students', requirePermission('students.view'), asyncHandler(students.listStudents));
-router.get('/students/:id', requirePermission('students.view'), asyncHandler(students.getStudent));
+router.get('/students', requirePermissionOrRole('students.view', 'STUDENT'), asyncHandler(students.listStudents));
+router.get('/students/:id', requirePermissionOrRole('students.view', 'STUDENT'), asyncHandler(students.getStudent));
 router.post('/students', requirePermission('students.create'), asyncHandler(students.createStudent));
 router.patch('/students/:id', requirePermission('students.update'), asyncHandler(students.updateStudent));
 router.delete('/students/:id', requirePermission('students.delete'), asyncHandler(students.deleteStudent));
