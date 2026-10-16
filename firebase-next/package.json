@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "claims:set": "tsx scripts/set-custom-claims.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
