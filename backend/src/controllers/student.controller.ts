@@ -6,7 +6,7 @@ import { studentSchema } from '../validators';
 import { auditLog } from '../utils/audit';
 import { hashPassword, generateAdmissionNo } from '../utils/password';
 import { grantStudentDefaults } from './user.controller';
-import { findUserByEmail, updateUser as updateUserDocument } from '../repositories/firestore-auth.repository';
+import { findUserByEmail } from '../repositories/firestore-auth.repository';
 import crypto from 'crypto';
 
 type Doc = Record<string, any>;
