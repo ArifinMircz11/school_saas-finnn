@@ -113,7 +113,7 @@ export async function updateStudent(req: Request, res: Response) {
   const targetClassId = body.classId ?? existing.classId ?? undefined;
   const targetSectionId = body.sectionId !== undefined
     ? body.sectionId
-    : (body.classId && body.classId !== existing.classId ? undefined : existing.sectionId ?? undefined);
+    : (body.classId && body.classId !== existing.classId ? null : existing.sectionId ?? null);
   if (targetClassId) {
     const cls = await prisma.class.findFirst({ where: { id: targetClassId, schoolId } });
     if (!cls) throw new ApiError(404, 'Class not found');
