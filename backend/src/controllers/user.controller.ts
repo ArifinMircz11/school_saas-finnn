@@ -7,7 +7,7 @@ import { auditLog } from '../utils/audit';
 import { schoolOf } from './student.controller';
 import { createUserSchema, updateUserSchema, setUserRolesSchema, setUserPermissionsSchema } from '../validators';
 import { SUPER_ADMIN_ONLY_PERMISSIONS } from '../config/permissions';
-import { findUserByEmail, findUserById, getUserPermissions, getUserRoles, updateUser as updateUserDocument } from '../repositories/firestore-auth.repository';
+import { findUserByEmail, findUserById, updateUser as updateUserDocument } from '../repositories/firestore-auth.repository';
 
 type Doc = Record<string, any>;
 
@@ -119,18 +119,22 @@ export async function grantPrincipalDefaults(userId: string) {
 }
 
 async function accessData(userId: string) {
-  const db = dbOrThrow();
   const [roles, permissionRows] = await Promise.all([
-    getUserRoles(userId),
+    roleRows(userId),
     rowsForUser('userPermissions', userId),
   ]);
   const granted = permissionRows.filter((row) => row.granted === true);
   const allPermissions = await permissionDocuments();
   const permissionById = new Map(allPermissions.map((permission) => [permission.id, permission]));
-  const permissions = granted.map((row) => permissionById.get(row.permissionId))
-    .filter((permission): permission is Doc => Boolean(permission))
-    .map((permission) => ({ id: permission.id, permission: { key: permission.key }, granted: true, userId }));
-  return { roles: roles.map((role) => ({ role })), permissions };
+  const permissions = granted.map((row) => {
+    const { _docPath, ...data } = row;
+    const permission = permissionById.get(row.permissionId);
+    return permission ? { ...data, permission: { key: permission.key } } : null;
+  }).filter((row) => row !== null);
+  return {
+    roles: roles.map(({ _docPath, ...role }) => role),
+    permissions,
+  };
 }
 
 async function usersInScope(schoolId?: string | null): Promise<Doc[]> {
