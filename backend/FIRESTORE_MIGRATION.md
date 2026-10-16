@@ -1,0 +1,47 @@
+# PostgreSQL → Cloud Firestore migration
+
+## Scope and safety
+
+The source of truth today is PostgreSQL accessed through Prisma. The target is the configured named Cloud Firestore database. This migration runner copies records; it never deletes or mutates the PostgreSQL source.
+
+**This script migrates data only. It does not switch API controllers to Firestore. Do not cut over production traffic until the Firestore repository implementation for every API domain has replaced Prisma calls and the API integration suite passes.**
+
+## Target document layout
+
+- `School` → `schools/{schoolId}`
+- Records with a resolved tenant → `schools/{schoolId}/{modelCollection}/{recordId}`
+- Platform-level records (for example permissions, plans, email OTPs, and unscoped platform audit/support records) → `system_{modelCollection}/{recordId}`
+- Foreign-key fields remain IDs. Relation joins are not materialized; API repositories must resolve them from Firestore.
+
+Document IDs preserve the original PostgreSQL record IDs. The preflight refuses to write any documents if it cannot resolve a tenant for a record. Prisma Decimal values are serialized as strings to avoid silently rounding financial values; consumers must convert/validate these fields deliberately when the Firestore repositories are implemented.
+
+## Required environment
+
+Configure these in the backend runtime environment, not in source control:
+
+- `DATABASE_URL`: read-only credentials to the existing PostgreSQL source are recommended.
+- `FIREBASE_PROJECT_ID`: destination Firebase project ID.
+- `FIRESTORE_DATABASE_ID`: exact named Firestore database ID.
+
+Firebase Admin credentials must be available through the deployment's supported Application Default Credentials / service account mechanism. Never commit credentials or service-account JSON.
+
+## Commands
+
+From `backend/`:
+
+1. `npm run migrate:firestore:dry-run` — reads PostgreSQL and builds a full migration plan; performs no writes.
+2. Inspect the summary and resolve any preflight failures.
+3. `npm run migrate:firestore` — writes documents in batches of 400 and records a run summary in `_migrationRuns`.
+
+The apply command is repeatable for the same source IDs, but it overwrites matching destination documents. Do not run it against a populated destination until collisions and ownership have been reviewed. It does not clear destination documents absent from PostgreSQL.
+
+## Completion gates
+
+- Dry run reports all source records accounted for and zero unresolved tenant records.
+- Apply completes with no failed batches.
+- Verify source and target counts per model, representative relation IDs, tenant separation, and financial decimal values.
+- Implement Firestore repositories and migrate all API controllers/services off Prisma.
+- Update readiness health checks to Firestore and add HTTP integration tests for all five dashboards.
+- Only then deploy the database cutover; retain PostgreSQL until rollback criteria are met.
+
+The configured database identifier is sourced from `FIRESTORE_DATABASE_ID` and the checked-in applet configuration. The script never silently falls back to the default Firestore database.
