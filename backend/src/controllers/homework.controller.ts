@@ -10,7 +10,7 @@ import { uploadToStorage } from '../middleware/upload';
 export async function createHomework(req: Request, res: Response) {
   const body = homeworkSchema.parse(req.body);
   const schoolId = schoolOf(req);
-  const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth!.sub, schoolId, deletedAt: null } });
+  const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth!.sub, schoolId } });
   if (!teacher) throw new ApiError(403, 'Teacher account required');
   if (body.sectionId) {
     const section = await prisma.section.findFirst({ where: { id: body.sectionId, schoolId } });
@@ -40,7 +40,7 @@ export async function listHomework(req: Request, res: Response) {
     else where.sectionId = '__no_section__';
     submissions = { where: { studentId: student.id }, include: { student: true } };
   } else if (req.auth?.roles.includes('TEACHER')) {
-    const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth.sub, schoolId, deletedAt: null }, select: { id: true } });
+    const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
     if (!teacher) throw new ApiError(404, 'Teacher not found');
     where.teacherId = teacher.id;
     if (sectionId) {
