@@ -43,7 +43,7 @@ export async function getTimetable(req: Request, res: Response) {
     if (teacherId) throw new ApiError(403, 'Students cannot query another teacher timetable');
     where.sectionId = student.sectionId || '__no_section__';
   } else if (req.auth?.roles.includes('TEACHER')) {
-    const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth.sub, schoolId, deletedAt: null }, select: { id: true } });
+    const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
     if (!teacher) throw new ApiError(404, 'Teacher not found');
     if (teacherId && teacherId !== teacher.id) throw new ApiError(404, 'Timetable not found');
     where.teacherId = teacher.id;
