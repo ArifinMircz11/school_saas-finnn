@@ -7,9 +7,14 @@ import { auditLog } from '../utils/audit';
 import { schoolOf } from './student.controller';
 import { createUserSchema, updateUserSchema, setUserRolesSchema, setUserPermissionsSchema } from '../validators';
 import { SUPER_ADMIN_ONLY_PERMISSIONS } from '../config/permissions';
-import { findUserByEmail, findUserById, getUserPermissions, getUserRoles, publicUser, updateUser as updateUserDocument } from '../repositories/firestore-auth.repository';
+import { findUserByEmail, findUserById, getUserPermissions, getUserRoles, updateUser as updateUserDocument } from '../repositories/firestore-auth.repository';
 
 type Doc = Record<string, any>;
+
+function publicUser(user: Doc): Doc {
+  const { _docPath, ...data } = user;
+  return data;
+}
 
 const PRINCIPAL_DEFAULT_PERMISSIONS = [
   'students.view', 'teachers.view', 'attendance.view', 'results.view', 'admissions.view', 'admissions.review',
@@ -130,8 +135,12 @@ async function accessData(userId: string) {
 
 async function usersInScope(schoolId?: string | null): Promise<Doc[]> {
   const db = dbOrThrow();
-  if (schoolId) {
+  if (typeof schoolId === 'string') {
     const snapshot = await db.collection('schools').doc(schoolId).collection('users').get();
+    return snapshot.docs.map(toDoc);
+  }
+  if (schoolId === null) {
+    const snapshot = await db.collection('system_users').get();
     return snapshot.docs.map(toDoc);
   }
   const [tenant, system] = await Promise.all([
@@ -148,6 +157,7 @@ async function roleRows(userId: string): Promise<Doc[]> {
 async function replaceUserRoles(user: Doc, roles: string[], assignedBy: string) {
   const db = dbOrThrow();
   const existing = await roleRows(user.id);
+  if (!existing.length && !roles.length) return;
   const batch = db.batch();
   existing.forEach((row) => row._docPath && batch.delete(db.doc(row._docPath)));
   roles.forEach((role) => {
@@ -163,6 +173,7 @@ async function replaceUserPermissions(user: Doc, keys: string[]) {
     rowsForUser('userPermissions', user.id),
     permissionDocuments(keys),
   ]);
+  if (!existing.length && !permissions.length) return;
   const batch = db.batch();
   existing.forEach((row) => row._docPath && batch.delete(db.doc(row._docPath)));
   permissions.forEach((permission) => {
