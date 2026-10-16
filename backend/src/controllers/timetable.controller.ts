@@ -42,6 +42,25 @@ export async function getTimetable(req: Request, res: Response) {
     if (sectionId && sectionId !== student.sectionId) throw new ApiError(404, 'Timetable not found');
     if (teacherId) throw new ApiError(403, 'Students cannot query another teacher timetable');
     where.sectionId = student.sectionId || '__no_section__';
+  } else if (req.auth?.roles.includes('PARENT')) {
+    if (teacherId) throw new ApiError(403, 'Parents may only view linked students timetable');
+    const parent = await prisma.parent.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
+    if (!parent) throw new ApiError(404, 'Parent record not found');
+    const links = await prisma.studentParent.findMany({
+      where: { parentId: parent.id, student: { schoolId, deletedAt: null } },
+      select: { studentId: true, student: { select: { sectionId: true } } },
+    });
+    const linkedStudents = links.filter((link) => link.student.sectionId);
+    if (!links.length) throw new ApiError(404, 'No linked students found');
+    if (studentId && !links.some((link) => link.studentId === studentId)) throw new ApiError(404, 'Student not found');
+    const sectionIds = [...new Set(linkedStudents.map((link) => link.student.sectionId as string))];
+    if (sectionId && !sectionIds.includes(sectionId)) throw new ApiError(404, 'Timetable not found');
+    if (studentId) {
+      const target = links.find((link) => link.studentId === studentId);
+      where.sectionId = target?.student.sectionId || '__no_section__';
+    } else {
+      where.sectionId = sectionId || (sectionIds.length ? { in: sectionIds } : '__no_section__');
+    }
   } else if (req.auth?.roles.includes('TEACHER')) {
     const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
     if (!teacher) throw new ApiError(404, 'Teacher not found');
