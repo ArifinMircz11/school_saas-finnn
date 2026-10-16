@@ -93,9 +93,9 @@ export async function deletePlan(req: Request, res: Response) {
 export async function listSubscriptions(req: Request, res: Response) {
   const { status, q } = req.query as { status?: string; q?: string };
   const schools = await allSchools();
-  const subscriptions = (await Promise.all(schools.map(async (school) => {
+  const subscriptions: Doc[] = (await Promise.all(schools.map(async (school) => {
     const rows = await allInSchool(school.id, 'schoolSubscriptions');
-    return rows.map((subscription) => ({ ...subscription, school }));
+    return rows.map((subscription) => ({ ...subscription, school } as Doc));
   }))).flat();
   let result = subscriptions;
   if (status) result = result.filter((item) => String(item.status).toUpperCase() === String(status).toUpperCase());
@@ -164,9 +164,9 @@ export async function createSubscription(req: Request, res: Response) {
 
 export async function listInvoices(req: Request, res: Response) {
   const schools = await allSchools();
-  const invoices = (await Promise.all(schools.map(async (school) => {
+  const invoices: Doc[] = (await Promise.all(schools.map(async (school) => {
     const rows = await allInSchool(school.id, 'invoices');
-    return rows.map((invoice) => ({ ...invoice, school }));
+    return rows.map((invoice) => ({ ...invoice, school } as Doc));
   }))).flat();
   invoices.sort((a, b) => millis(b.createdAt) - millis(a.createdAt));
   const result = await Promise.all(invoices.map(async (invoice) => {
