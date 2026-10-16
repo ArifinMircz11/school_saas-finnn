@@ -18,15 +18,20 @@ export function schoolOf(req: Request): string {
 
 // ---------- STUDENTS ----------
 export async function listStudents(req: Request, res: Response) {
+  const schoolId = schoolOf(req);
   const { classId, sectionId, q } = req.query as { classId?: string; sectionId?: string; q?: string };
-  const where: any = { schoolId: schoolOf(req), deletedAt: null };
-  if (classId) where.classId = classId;
-  if (sectionId) where.sectionId = sectionId;
-  if (q) where.OR = [
-    { firstName: { contains: q, mode: 'insensitive' } },
-    { lastName: { contains: q, mode: 'insensitive' } },
-    { admissionNo: { contains: q, mode: 'insensitive' } },
-  ];
+  const where: any = { schoolId, deletedAt: null };
+  if (req.auth?.roles.includes('STUDENT')) {
+    where.userId = req.auth.sub;
+  } else {
+    if (classId) where.classId = classId;
+    if (sectionId) where.sectionId = sectionId;
+    if (q) where.OR = [
+      { firstName: { contains: q, mode: 'insensitive' } },
+      { lastName: { contains: q, mode: 'insensitive' } },
+      { admissionNo: { contains: q, mode: 'insensitive' } },
+    ];
+  }
   const students = await prisma.student.findMany({
     where, include: { class: true, section: true, parents: { include: { parent: true } } }, orderBy: { admissionNo: 'asc' },
   });
@@ -34,11 +39,14 @@ export async function listStudents(req: Request, res: Response) {
 }
 
 export async function getStudent(req: Request, res: Response) {
-  const student = await prisma.student.findUnique({
-    where: { id: req.params.id },
+  const schoolId = schoolOf(req);
+  const where: any = { id: req.params.id, schoolId, deletedAt: null };
+  if (req.auth?.roles.includes('STUDENT')) where.userId = req.auth.sub;
+  const student = await prisma.student.findFirst({
+    where,
     include: { class: true, section: true, parents: { include: { parent: true } }, fees: { include: { structure: true, payments: true } }, documents: true, attendance: { take: 30, orderBy: { date: 'desc' } } },
   });
-  if (!student || student.schoolId !== schoolOf(req)) throw new ApiError(404, 'Student not found');
+  if (!student) throw new ApiError(404, 'Student not found');
   return ok(res, student, 'Student fetched');
 }
 
