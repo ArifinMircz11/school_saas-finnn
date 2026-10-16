@@ -16,6 +16,18 @@ export function schoolOf(req: Request): string {
   return schoolId;
 }
 
+async function linkedStudentIdsForParent(userId: string, schoolId: string): Promise<string[]> {
+  const parent = await prisma.parent.findFirst({ where: { userId, schoolId }, select: { id: true } });
+  if (!parent) throw new ApiError(404, 'Parent record not found');
+  const links = await prisma.studentParent.findMany({
+    where: { parentId: parent.id, student: { schoolId, deletedAt: null } },
+    select: { studentId: true },
+  });
+  const ids = [...new Set(links.map((link) => link.studentId))];
+  if (!ids.length) throw new ApiError(404, 'No linked students found');
+  return ids;
+}
+
 // ---------- STUDENTS ----------
 export async function listStudents(req: Request, res: Response) {
   const schoolId = schoolOf(req);
@@ -24,6 +36,9 @@ export async function listStudents(req: Request, res: Response) {
   if (req.auth?.roles.includes('STUDENT')) {
     where.userId = req.auth.sub;
   } else {
+    if (req.auth?.roles.includes('PARENT')) {
+      where.id = { in: await linkedStudentIdsForParent(req.auth.sub, schoolId) };
+    }
     if (classId) where.classId = classId;
     if (sectionId) where.sectionId = sectionId;
     if (q) where.OR = [
@@ -42,6 +57,10 @@ export async function getStudent(req: Request, res: Response) {
   const schoolId = schoolOf(req);
   const where: any = { id: req.params.id, schoolId, deletedAt: null };
   if (req.auth?.roles.includes('STUDENT')) where.userId = req.auth.sub;
+  if (req.auth?.roles.includes('PARENT')) {
+    const linkedIds = await linkedStudentIdsForParent(req.auth.sub, schoolId);
+    if (!linkedIds.includes(req.params.id)) throw new ApiError(404, 'Student not found');
+  }
   const student = await prisma.student.findFirst({
     where,
     include: { class: true, section: true, parents: { include: { parent: true } }, fees: { include: { structure: true, payments: true } }, documents: true, attendance: { take: 30, orderBy: { date: 'desc' } } },
