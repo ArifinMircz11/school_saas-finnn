@@ -60,13 +60,14 @@ async function hydrateStudent(schoolId: string, student: Doc): Promise<Doc> {
 
 async function guardiansForStudent(schoolId: string, studentId: string): Promise<Doc[]> {
   const [links, parents] = await Promise.all([all(schoolId, 'studentParents'), all(schoolId, 'parents')]);
-  return links.filter((link) => link.studentId === studentId).map((link) => {
+  const mapped: Array<Doc | null> = links.filter((link) => link.studentId === studentId).map((link) => {
     const parent = parents.find((item) => item.id === link.parentId);
     return parent ? {
       id: parent.id, firstName: parent.firstName, lastName: parent.lastName,
       phone: parent.phone, relationship: link.relationship,
     } : null;
-  }).filter((item): item is Doc => item !== null);
+  });
+  return mapped.filter((item) => item !== null) as Doc[];
 }
 
 /** Shared dashboard summaries, branched by role. All reads are tenant-scoped. */
@@ -203,7 +204,7 @@ async function buildReportAnalysis(schoolId: string, studentId?: string | null) 
   const published = results.filter((item) => item.studentId === studentId && item.published === true);
   if (!published.length) return null;
 
-  const hydrated = published.map((result) => {
+  const hydrated: Doc[] = published.map((result: Doc): Doc => {
     const examSubject = examSubjects.find((item) => item.id === result.examSubjectId) || null;
     return {
       ...result,
@@ -217,7 +218,7 @@ async function buildReportAnalysis(schoolId: string, studentId?: string | null) 
           name: exams.find((item) => item.id === examSubject.examId)!.name,
           endDate: exams.find((item) => item.id === examSubject.examId)!.endDate,
         } : null,
-      } : null,
+      } as Doc : null,
     };
   }).sort((a, b) => time(b.examSubject?.exam?.endDate) - time(a.examSubject?.exam?.endDate));
 
