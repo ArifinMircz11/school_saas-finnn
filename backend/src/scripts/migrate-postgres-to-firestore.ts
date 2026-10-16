@@ -176,12 +176,29 @@ async function main() {
     console.log(`Migrated ${written}/${planned.length}`);
   }
 
+  let verified = 0;
+  for (let start = 0; start < planned.length; start += BATCH_SIZE) {
+    const refs = planned.slice(start, start + BATCH_SIZE).map((item) => db.doc(item.path));
+    const snapshots = await db.getAll(...refs);
+    for (let index = 0; index < snapshots.length; index++) {
+      if (!snapshots[index].exists || snapshots[index].id !== planned[start + index].data.id) {
+        throw new Error(`Post-write verification failed at ${planned[start + index].path}`);
+      }
+      verified++;
+    }
+  }
+  if (verified !== planned.length) {
+    throw new Error(`Post-write verification count mismatch: expected ${planned.length}, found ${verified}`);
+  }
+  console.log(`Verified ${verified}/${planned.length} destination documents`);
+
   const runId = new Date().toISOString().replace(/[:.]/g, '-');
   await db.collection('_migrationRuns').doc(runId).set({
     source: 'postgresql-prisma',
     targetDatabaseId: process.env.FIRESTORE_DATABASE_ID || null,
     completedAt: new Date(),
     recordCount: written,
+    verifiedCount: verified,
     models: Object.fromEntries(summary),
     decimalPolicy: 'Decimal values serialized as strings to preserve exact precision',
   });
