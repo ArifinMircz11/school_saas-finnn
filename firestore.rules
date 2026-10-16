@@ -1,15 +1,20 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Allow read-only access for health diagnostics probe
+    // Health probe: read-only access for connection checks
     match /_health_check/{document=**} {
       allow read: if true;
       allow write: if false;
     }
 
-    // Secure all application data: require authenticated user
+    // Strict Tenant Isolation: users can only read/write documents scoped to their verified schoolId
+    match /schools/{schoolId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.token.schoolId == schoolId;
+    }
+
+    // Default deny for all other collections
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if false;
     }
   }
 }
