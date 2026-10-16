@@ -81,14 +81,76 @@ const collectionSchema = z.enum([
   'exams',
   'feeRecords',
 ]);
-const recordSchema = z.record(z.unknown()).refine(
-  (record) => !['tenantId', 'id', 'createdAt', 'updatedAt', 'createdBy'].some((field) => field in record),
-  'tenantId, id, createdAt, updatedAt, and createdBy are server-managed fields.',
-);
 
+const rolesByCollection: Record<z.infer<typeof collectionSchema>, { read: string[]; write: string[] }> = {
+  students: { read: ['SCHOOL_ADMIN', 'PRINCIPAL'], write: ['SCHOOL_ADMIN'] },
+  teachers: { read: ['SCHOOL_ADMIN', 'PRINCIPAL'], write: ['SCHOOL_ADMIN'] },
+  classes: { read: ['SCHOOL_ADMIN', 'PRINCIPAL'], write: ['SCHOOL_ADMIN', 'PRINCIPAL'] },
+  attendance: { read: ['SCHOOL_ADMIN', 'PRINCIPAL'], write: ['SCHOOL_ADMIN', 'PRINCIPAL', 'TEACHER'] },
+  notices: { read: ['SCHOOL_ADMIN', 'PRINCIPAL'], write: ['SCHOOL_ADMIN', 'PRINCIPAL'] },
+  homework: { read: ['SCHOOL_ADMIN', 'PRINCIPAL'], write: ['SCHOOL_ADMIN', 'PRINCIPAL', 'TEACHER'] },
+  exams: { read: ['SCHOOL_ADMIN', 'PRINCIPAL'], write: ['SCHOOL_ADMIN', 'PRINCIPAL', 'TEACHER'] },
+  feeRecords: { read: ['SCHOOL_ADMIN'], write: ['SCHOOL_ADMIN'] },
+};
+
+const recordSchemas = {
+  students: z.object({
+    firstName: z.string().trim().min(1).max(100),
+    lastName: z.string().trim().min(1).max(100),
+    admissionNumber: z.string().trim().min(1).max(50).optional(),
+    classId: z.string().trim().min(1).max(128).optional(),
+    status: z.enum(['ACTIVE', 'INACTIVE', 'PENDING']).optional(),
+  }).strict(),
+  teachers: z.object({
+    firstName: z.string().trim().min(1).max(100),
+    lastName: z.string().trim().min(1).max(100),
+    email: z.string().email().max(254).optional(),
+    employeeCode: z.string().trim().min(1).max(50).optional(),
+    subjectIds: z.array(z.string().min(1).max(128)).max(100).optional(),
+  }).strict(),
+  classes: z.object({
+    name: z.string().trim().min(1).max(100),
+    section: z.string().trim().max(50).optional(),
+    academicYear: z.string().trim().min(4).max(20).optional(),
+  }).strict(),
+  attendance: z.object({
+    studentId: z.string().trim().min(1).max(128),
+    date: z.string().datetime({ offset: true }),
+    status: z.enum(['PRESENT', 'ABSENT', 'LATE', 'LEAVE']),
+    note: z.string().trim().max(1000).optional(),
+  }).strict(),
+  notices: z.object({
+    title: z.string().trim().min(1).max(200),
+    body: z.string().trim().min(1).max(10000),
+    audience: z.enum(['ALL', 'STUDENTS', 'TEACHERS', 'PARENTS']).default('ALL'),
+    published: z.boolean().default(false),
+  }).strict(),
+  homework: z.object({
+    title: z.string().trim().min(1).max(200),
+    description: z.string().trim().max(10000).optional(),
+    classId: z.string().trim().min(1).max(128),
+    dueAt: z.string().datetime({ offset: true }).optional(),
+  }).strict(),
+  exams: z.object({
+    title: z.string().trim().min(1).max(200),
+    classId: z.string().trim().min(1).max(128).optional(),
+    startsAt: z.string().datetime({ offset: true }).optional(),
+    endsAt: z.string().datetime({ offset: true }).optional(),
+  }).strict(),
+  feeRecords: z.object({
+    studentId: z.string().trim().min(1).max(128),
+    amountMinor: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    currency: z.string().regex(/^[A-Z]{3}$/),
+    status: z.enum(['DUE', 'PARTIAL', 'PAID', 'WAIVED']).default('DUE'),
+    dueAt: z.string().datetime({ offset: true }).optional(),
+  }).strict(),
+};
 app.get('/v1/:collection', requireFirebaseIdentity, async (req: AuthenticatedRequest, res) => {
   const parsed = collectionSchema.safeParse(req.params.collection);
   if (!parsed.success) return res.status(404).json({ error: 'Collection is not exposed by this API.' });
+  if (!rolesByCollection[parsed.data].read.some((role) => req.principal!.roles.includes(role))) {
+    return res.status(403).json({ error: 'Your role cannot read records in this collection.' });
+  }
   try {
     const snapshot = await db.collection(parsed.data)
       .where('tenantId', '==', req.principal!.tenantId)
@@ -106,21 +168,16 @@ app.get('/v1/:collection', requireFirebaseIdentity, async (req: AuthenticatedReq
 app.post('/v1/:collection', requireFirebaseIdentity, async (req: AuthenticatedRequest, res) => {
   const parsedCollection = collectionSchema.safeParse(req.params.collection);
   if (!parsedCollection.success) return res.status(404).json({ error: 'Collection is not exposed by this API.' });
-  const writerRoles: Record<z.infer<typeof collectionSchema>, string[]> = {
-    students: ['SCHOOL_ADMIN'],
-    teachers: ['SCHOOL_ADMIN'],
-    classes: ['SCHOOL_ADMIN', 'PRINCIPAL'],
-    attendance: ['SCHOOL_ADMIN', 'PRINCIPAL', 'TEACHER'],
-    notices: ['SCHOOL_ADMIN', 'PRINCIPAL'],
-    homework: ['SCHOOL_ADMIN', 'PRINCIPAL', 'TEACHER'],
-    exams: ['SCHOOL_ADMIN', 'PRINCIPAL', 'TEACHER'],
-    feeRecords: ['SCHOOL_ADMIN'],
-  };
-  if (!writerRoles[parsedCollection.data].some((role) => req.principal!.roles.includes(role))) {
+  if (!rolesByCollection[parsedCollection.data].write.some((role) => req.principal!.roles.includes(role))) {
     return res.status(403).json({ error: 'Your role cannot create records in this collection.' });
   }
-  const parsedRecord = recordSchema.safeParse(req.body);
-  if (!parsedRecord.success) return res.status(400).json({ error: 'Invalid record. id, tenantId, and audit fields are server-managed.' });
+  const parsedRecord = recordSchemas[parsedCollection.data].safeParse(req.body);
+  if (!parsedRecord.success) {
+    return res.status(400).json({
+      error: 'Record validation failed.',
+      issues: parsedRecord.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
+    });
+  }
 
   try {
     const now = new Date().toISOString();
