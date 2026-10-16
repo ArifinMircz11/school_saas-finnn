@@ -31,9 +31,16 @@ export async function addExamSubject(req: Request, res: Response) {
 }
 export async function listMarks(req: Request, res: Response) {
   const { examId, examSubjectId } = req.query as { examId?: string; examSubjectId?: string };
-  const where: any = { schoolId: schoolOf(req) };
+  const schoolId = schoolOf(req);
+  const where: any = { schoolId };
   if (examId) where.examId = examId;
   if (examSubjectId) where.examSubjectId = examSubjectId;
+  if (req.auth?.roles.includes('STUDENT')) {
+    const student = await prisma.student.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
+    if (!student) throw new ApiError(404, 'Student not found');
+    where.studentId = student.id;
+    where.published = true;
+  }
   const marks = await prisma.examResult.findMany({ where, include: { student: true, exam: true, examSubject: { include: { subject: true } } } });
   return ok(res, marks, 'Marks fetched');
 }
@@ -82,7 +89,7 @@ export async function studentResults(req: Request, res: Response) {
     where.studentId = studentId;
   }
   if (examId) where.examId = examId;
-  if (publishedOnly === 'true') where.published = true;
+  if (isStudentRole || publishedOnly === 'true') where.published = true;
   const results = await prisma.examResult.findMany({ where, include: { exam: true, examSubject: { include: { subject: true } }, student: { select: { id: true, firstName: true, lastName: true, admissionNo: true } } }, orderBy: { createdAt: 'desc' } });
   return ok(res, results, 'Results fetched');
 }
