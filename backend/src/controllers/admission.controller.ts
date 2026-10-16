@@ -37,21 +37,26 @@ export async function listAdmissions(req: Request, res: Response) {
 }
 
 export async function reviewAdmission(req: Request, res: Response) {
-  const { status } = req.body as { status: string };
-  const admission = await prisma.admission.findUnique({ where: { id: req.params.id }, include: { documents: true } });
-  if (!admission || admission.schoolId !== schoolOf(req)) throw new ApiError(404, 'Admission not found');
+  const status = String(req.body?.status || '').toUpperCase();
+  const schoolId = schoolOf(req);
+  if (!['APPROVED', 'REJECTED'].includes(status)) throw new ApiError(400, 'Status must be APPROVED or REJECTED');
+  const admission = await prisma.admission.findFirst({ where: { id: req.params.id, schoolId }, include: { documents: true } });
+  if (!admission) throw new ApiError(404, 'Admission not found');
+  if (admission.status !== 'PENDING') throw new ApiError(409, 'Only pending admissions can be reviewed');
+
   if (status === 'APPROVED') {
-    if (admission.classId && !await prisma.class.findFirst({ where: { id: admission.classId, schoolId: admission.schoolId } })) {
-      throw new ApiError(409, 'Admission class is no longer valid for this school');
-    }
     const result = await convertAdmissionToStudent(admission);
-    await prisma.admission.update({ where: { id: admission.id }, data: { status: 'CONVERTED' } });
-    await auditLog({ userId: req.auth?.sub, schoolId: schoolOf(req), ip: req.ip, action: 'ADMISSION_APPROVED', module: 'ADMISSIONS' });
+    await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'ADMISSION_APPROVED', module: 'ADMISSIONS' });
     return ok(res, result, 'Admission approved and student created');
   }
-  await prisma.admission.update({ where: { id: admission.id }, data: { status } });
-  await auditLog({ userId: req.auth?.sub, schoolId: schoolOf(req), ip: req.ip, action: `ADMISSION_${status}`, module: 'ADMISSIONS' });
-  return ok(res, null, `Admission ${status.toLowerCase()}`);
+
+  const updated = await prisma.admission.updateMany({
+    where: { id: admission.id, schoolId, status: 'PENDING' },
+    data: { status: 'REJECTED' },
+  });
+  if (updated.count !== 1) throw new ApiError(409, 'Admission was already reviewed');
+  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'ADMISSION_REJECTED', module: 'ADMISSIONS' });
+  return ok(res, null, 'Admission rejected');
 }
 
 /** Upload a document for an admission application. */
@@ -69,34 +74,39 @@ export async function uploadAdmissionDocument(req: Request, res: Response) {
 async function convertAdmissionToStudent(admission: any) {
   const schoolId = admission.schoolId;
   const admissionNo = generateAdmissionNo();
-      // Each student gets a UNIQUE login (even siblings share same parent email —
-  // this login is the student's own, never the parent's).
   const password = crypto.randomBytes(16).toString('base64').slice(0, 12);
   const passwordHash = await hashPassword(password);
-  // Always generate a unique email per student (admission-number based).
-  const studentEmail = `${admissionNo.toLowerCase()}@student.${admission.schoolId}.local`;
-  const student = await prisma.$transaction(async (tx) => {
-    let user = await tx.user.findUnique({ where: { email: studentEmail } });
-    if (!user) {
-      user = await tx.user.create({
-        data: { schoolId, email: studentEmail, firstName: admission.firstName, lastName: admission.lastName, passwordHash, roles: { create: [{ role: 'STUDENT' }] } },
-      });
-    } else {
-      // Generated student emails must never be reused to overwrite an existing identity.
-      throw new ApiError(409, 'Generated student account already exists; retry admission conversion');
+  const studentEmail = admissionNo.toLowerCase() + '@student.' + schoolId + '.local';
+
+  const result = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.admission.updateMany({
+      where: { id: admission.id, schoolId, status: 'PENDING' },
+      data: { status: 'PROCESSING' },
+    });
+    if (claimed.count !== 1) throw new ApiError(409, 'Admission was already reviewed');
+
+    if (admission.classId) {
+      const cls = await tx.class.findFirst({ where: { id: admission.classId, schoolId } });
+      if (!cls) throw new ApiError(409, 'Admission class is no longer valid for this school');
     }
-    const st = await tx.student.create({
+    const existingUser = await tx.user.findUnique({ where: { email: studentEmail }, select: { id: true } });
+    if (existingUser) throw new ApiError(409, 'Generated student account already exists; retry admission conversion');
+
+    const user = await tx.user.create({
+      data: { schoolId, email: studentEmail, firstName: admission.firstName, lastName: admission.lastName, passwordHash, roles: { create: [{ role: 'STUDENT' }] } },
+    });
+    const student = await tx.student.create({
       data: { schoolId, firstName: admission.firstName, lastName: admission.lastName, gender: admission.gender || 'OTHER', dob: admission.dob || new Date(), admissionNo, classId: admission.classId, userId: user.id },
     });
-    // Guardian contact info stored as data only (no separate login account).
     const parent = await tx.parent.create({
       data: { schoolId, firstName: admission.parentName || 'Guardian', lastName: admission.lastName, phone: admission.parentPhone || null },
     });
-    await tx.studentParent.create({ data: { studentId: st.id, parentId: parent.id, relationship: 'PARENT', isPrimary: true } });
-    // Grant STUDENT permissions.
-    const { grantStudentDefaults } = await import('./user.controller');
-    await grantStudentDefaults(user.id);
-    return st;
+    await tx.studentParent.create({ data: { studentId: student.id, parentId: parent.id, relationship: 'PARENT', isPrimary: true } });
+    await tx.admission.update({ where: { id: admission.id }, data: { status: 'CONVERTED' } });
+    return { student, userId: user.id };
   });
-  return { student };
+
+  const { grantStudentDefaults } = await import('./user.controller');
+  await grantStudentDefaults(result.userId);
+  return { student: result.student };
 }
