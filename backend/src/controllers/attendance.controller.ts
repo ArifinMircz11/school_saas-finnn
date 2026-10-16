@@ -55,13 +55,13 @@ export async function markAttendance(req: Request, res: Response) {
     const student = await tenantCollection(schoolId, 'students').doc(rec.studentId).get();
     if (!student.exists) continue;
 
-    const existing = await tenantCollection(schoolId, 'attendance').where('studentId', '==', rec.studentId).get();
+    const existing = await tenantCollection(schoolId, 'attendances').where('studentId', '==', rec.studentId).get();
     const attendance = existing.docs.find((doc) => sameDay(doc.get('date'), date));
     if (attendance) {
       await attendance.ref.update({ status: rec.status, remarks: rec.remarks ?? null, markedBy: req.auth?.sub ?? null });
     } else {
       const id = randomUUID();
-      await tenantCollection(schoolId, 'attendance').doc(id).create({
+      await tenantCollection(schoolId, 'attendances').doc(id).create({
         id,
         schoolId,
         studentId: rec.studentId,
@@ -91,7 +91,7 @@ export async function getAttendance(req: Request, res: Response) {
     sectionStudentIds = new Set(students.docs.map((doc) => doc.id));
   }
 
-  const snapshot = await tenantCollection(schoolId, 'attendance').get();
+  const snapshot = await tenantCollection(schoolId, 'attendances').get();
   let records = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as any);
   if (studentId) records = records.filter((record) => record.studentId === studentId);
   if (sectionStudentIds) records = records.filter((record) => sectionStudentIds!.has(record.studentId));
@@ -112,7 +112,7 @@ export async function getAttendance(req: Request, res: Response) {
 export async function attendanceSummary(req: Request, res: Response) {
   const schoolId = schoolOf(req);
   const studentId = req.query.studentId as string | undefined;
-  const snapshot = await tenantCollection(schoolId, 'attendance').get();
+  const snapshot = await tenantCollection(schoolId, 'attendances').get();
   const records = snapshot.docs
     .map((doc) => doc.data())
     .filter((record: any) => !studentId || record.studentId === studentId);
