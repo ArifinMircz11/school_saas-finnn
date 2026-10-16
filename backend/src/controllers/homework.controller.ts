@@ -39,6 +39,15 @@ export async function listHomework(req: Request, res: Response) {
     if (student.sectionId) where.sectionId = student.sectionId;
     else where.sectionId = '__no_section__';
     submissions = { where: { studentId: student.id }, include: { student: true } };
+  } else if (req.auth?.roles.includes('TEACHER')) {
+    const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth.sub, schoolId }, select: { id: true } });
+    if (!teacher) throw new ApiError(404, 'Teacher not found');
+    where.teacherId = teacher.id;
+    if (sectionId) {
+      const section = await prisma.section.findFirst({ where: { id: sectionId, schoolId }, select: { id: true } });
+      if (!section) throw new ApiError(404, 'Section not found');
+      where.sectionId = sectionId;
+    }
   } else if (sectionId) {
     const section = await prisma.section.findFirst({ where: { id: sectionId, schoolId }, select: { id: true } });
     if (!section) throw new ApiError(404, 'Section not found');
