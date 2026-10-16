@@ -35,6 +35,9 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.status(200).json({ success: true, status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Apply API rate limiting before every API endpoint, including health diagnostics.
+app.use('/api', apiLimiter);
+
 // Readiness probe verifies the primary operational database, unlike the liveness probe above.
 // Keep provider details and connection strings out of the public response.
 app.get('/api/health/ready', async (_req: Request, res: Response) => {
@@ -56,8 +59,6 @@ app.get('/api/health/ready', async (_req: Request, res: Response) => {
   }
 });
 
-// Apply API rate limiting before every API endpoint, including health diagnostics.
-app.use('/api', apiLimiter);
 
 app.get('/api/firestore-health', requireAuth, requireRole('SUPER_ADMIN'), async (_req: Request, res: Response) => {
   const { testFirestoreConnection } = await import('./config/firestore');
