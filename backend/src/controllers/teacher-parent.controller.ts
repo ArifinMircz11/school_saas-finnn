@@ -61,7 +61,14 @@ export async function createTeacher(req: Request, res: Response) {
   ]);
   if (school.exists && teachers.length >= Number(school.get('maxTeachers') ?? 100)) throw new ApiError(400, 'Teacher limit reached');
 
+  for (const sectionId of body.sectionIds || []) {
+    if (!(await one(schoolId, 'sections', sectionId))) throw new ApiError(404, 'Section not found');
+  }
+  for (const subjectId of body.subjectIds || []) {
+    if (!(await one(schoolId, 'subjects', subjectId))) throw new ApiError(404, 'Subject not found');
+  }
   const tempHash = body.email ? await hashPassword(Math.random().toString(36).slice(2, 12)) : null;
+  const batch = dbOrThrow().batch();
   let createdUserId: string | undefined;
   let userId: string | null = null;
   let existingUser: Doc | null = null;
@@ -77,12 +84,10 @@ export async function createTeacher(req: Request, res: Response) {
         phone: body.phone ?? null, passwordHash: tempHash!, avatarUrl: null, emailVerified: false,
         isActive: true, lastLoginAt: null, deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
       };
-      const batch = dbOrThrow().batch();
       batch.create(collection(schoolId, 'users').doc(userId), user);
       batch.create(collection(schoolId, 'userRoleAssignments').doc(roleId), {
         id: roleId, userId, role: 'TEACHER', assignedBy: req.auth?.sub ?? null,
       });
-      await batch.commit();
       createdUserId = userId;
     } else {
       userId = existingUser.id;
@@ -96,15 +101,12 @@ export async function createTeacher(req: Request, res: Response) {
     phone: body.phone ?? null, photoUrl: null, designation: body.designation ?? null,
     empCode, createdAt: new Date(),
   };
-  const batch = dbOrThrow().batch();
   batch.create(collection(schoolId, 'teachers').doc(teacherId), teacher);
-  for (const sectionId of body.sectionIds || []) {
-    if (!(await one(schoolId, 'sections', sectionId))) throw new ApiError(404, 'Section not found');
+  for (const sectionId of [...new Set(body.sectionIds || [])]) {
     const id = randomUUID();
     batch.create(collection(schoolId, 'teacherSections').doc(id), { id, teacherId, sectionId });
   }
-  for (const subjectId of body.subjectIds || []) {
-    if (!(await one(schoolId, 'subjects', subjectId))) throw new ApiError(404, 'Subject not found');
+  for (const subjectId of [...new Set(body.subjectIds || [])]) {
     const id = randomUUID();
     batch.create(collection(schoolId, 'teacherSubjects').doc(id), { id, teacherId, subjectId });
   }
@@ -151,20 +153,18 @@ export async function createParent(req: Request, res: Response) {
     phone: body.phone ?? null, occupation: null, createdAt: new Date(),
   };
   const batch = dbOrThrow().batch();
+  const children: Doc[] = [];
+  const students = await all(schoolId, 'students');
   batch.create(collection(schoolId, 'parents').doc(parentId), parent);
   for (const studentId of studentIds) {
     const id = randomUUID();
     batch.create(collection(schoolId, 'studentParents').doc(id), {
       id, studentId, parentId, relationship: 'PARENT', isPrimary: false,
     });
+    children.push({ id, studentId, parentId, relationship: 'PARENT', isPrimary: false, student: students.find((student) => student.id === studentId) || null });
   }
   await batch.commit();
   await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'CREATE_PARENT', module: 'PARENTS' });
-  const students = await all(schoolId, 'students');
-  const children = studentIds.map((studentId) => ({
-    id: randomUUID(), studentId, parentId, relationship: 'PARENT', isPrimary: false,
-    student: students.find((student) => student.id === studentId) || null,
-  }));
   return ok(res, { ...parent, children }, 'Parent (guardian) created — parents log in with the student\'s credentials');
 }
 
