@@ -119,10 +119,8 @@ export async function getPrincipalProfile(req: Request, res: Response) {
   const schoolId = schoolOf(req);
   const profiles = await byField(schoolId, 'principalProfiles', 'userId', req.auth!.sub);
   const profile = profiles[0] || null;
-  const school = await one(schoolId, 'schools', schoolId) || await (async () => {
-    const snapshot = await dbOrThrow().collection('schools').doc(schoolId).get();
-    return snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null;
-  })();
+  const schoolSnapshot = await dbOrThrow().collection('schools').doc(schoolId).get();
+  const school = schoolSnapshot.exists ? { id: schoolSnapshot.id, ...schoolSnapshot.data() } : null;
   return ok(res, profile ? {
     ...profile,
     school: school ? { id: school.id, name: school.name, logoUrl: school.logoUrl, settings: school.settings } : null,
