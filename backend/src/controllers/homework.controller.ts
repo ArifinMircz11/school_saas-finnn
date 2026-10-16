@@ -7,19 +7,22 @@ import { schoolOf } from './student.controller';
 import { notifySection } from '../services/notification.service';
 import { uploadToStorage } from '../middleware/upload';
 
-/** Teacher creates homework for their section/subject. */
 export async function createHomework(req: Request, res: Response) {
   const body = homeworkSchema.parse(req.body);
   const schoolId = schoolOf(req);
-  const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth!.sub } });
+  const teacher = await prisma.teacher.findFirst({ where: { userId: req.auth!.sub, schoolId } });
   if (!teacher) throw new ApiError(403, 'Teacher account required');
+  if (body.sectionId) {
+    const section = await prisma.section.findFirst({ where: { id: body.sectionId, schoolId } });
+    if (!section) throw new ApiError(404, 'Section not found');
+  }
+  const subject = await prisma.subject.findFirst({ where: { id: body.subjectId!, schoolId } });
+  if (!subject) throw new ApiError(404, 'Subject not found');
   const attachmentUrl = req.file ? await uploadToStorage(req.file.path, 'homework') : null;
   const homework = await prisma.homework.create({
     data: { schoolId, teacherId: teacher.id, sectionId: body.sectionId, subjectId: body.subjectId!, title: body.title, description: body.description, attachmentUrl, dueDate: new Date(body.dueDate), published: true },
   });
-  if (body.sectionId) {
-    await notifySection(schoolId, body.sectionId, 'New Homework', `New homework assigned: ${body.title}`);
-  }
+  if (body.sectionId) await notifySection(schoolId, body.sectionId, 'New Homework', `New homework assigned: ${body.title}`);
   await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'CREATE_HOMEWORK', module: 'HOMEWORK' });
   return created(res, homework, 'Homework created');
 }
@@ -33,13 +36,12 @@ export async function listHomework(req: Request, res: Response) {
   return ok(res, homework, 'Homework fetched');
 }
 
-/** Student submits homework. */
 export async function submitHomework(req: Request, res: Response) {
   const schoolId = schoolOf(req);
-  const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub } });
+  const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub, schoolId } });
   if (!student) throw new ApiError(403, 'Student account required');
-  const hw = await prisma.homework.findUnique({ where: { id: req.params.id } });
-  if (!hw || hw.schoolId !== schoolId) throw new ApiError(404, 'Homework not found');
+  const hw = await prisma.homework.findFirst({ where: { id: req.params.id, schoolId } });
+  if (!hw) throw new ApiError(404, 'Homework not found');
   const attachmentUrl = req.file ? await uploadToStorage(req.file.path, 'homework-submissions') : null;
   const existing = await prisma.homeworkSubmission.findUnique({ where: { homeworkId_studentId: { homeworkId: hw.id, studentId: student.id } } });
   const submission = existing
@@ -48,11 +50,13 @@ export async function submitHomework(req: Request, res: Response) {
   return created(res, submission, 'Homework submitted');
 }
 
-/** Teacher grades a submission. */
 export async function gradeHomework(req: Request, res: Response) {
+  const schoolId = schoolOf(req);
   const body = req.body;
   const submission = await prisma.homeworkSubmission.findUnique({ where: { id: req.params.id }, include: { homework: { include: { teacher: true } } } });
-  if (!submission || submission.homework.teacher.userId !== req.auth!.sub) throw new ApiError(403, 'Not your homework');
+  if (!submission || submission.homework.schoolId !== schoolId || submission.homework.teacher.userId !== req.auth!.sub) {
+    throw new ApiError(404, 'Homework submission not found');
+  }
   const updated = await prisma.homeworkSubmission.update({ where: { id: submission.id }, data: { marks: body.marks ?? submission.marks, feedback: body.feedback ?? submission.feedback } });
   return ok(res, updated, 'Submission graded');
 }
