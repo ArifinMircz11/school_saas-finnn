@@ -1,57 +1,150 @@
 import { Request, Response } from 'express';
-import { prisma } from '../config/database';
+import { randomUUID } from 'node:crypto';
+import { getFirestoreInstance } from '../config/firestore';
 import { ApiError, ok, created } from '../utils/response';
 import { examSchema, examSubjectSchema, enterMarksSchema } from '../validators';
 import { auditLog } from '../utils/audit';
 import { schoolOf } from './student.controller';
 import { sendNotification } from '../services/notification.service';
 
+type Doc = Record<string, any>;
+
+function dbOrThrow() {
+  const db = getFirestoreInstance();
+  if (!db) throw new ApiError(503, 'Firestore is not configured');
+  return db;
+}
+
+function collection(schoolId: string, name: string) {
+  return dbOrThrow().collection('schools').doc(schoolId).collection(name);
+}
+
+async function all(schoolId: string, name: string): Promise<Doc[]> {
+  const snapshot = await collection(schoolId, name).get();
+  return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+}
+
+async function one(schoolId: string, name: string, id?: string | null): Promise<Doc | null> {
+  if (!id) return null;
+  const snapshot = await collection(schoolId, name).doc(id).get();
+  return snapshot.exists ? { id: snapshot.id, ...snapshot.data() } as Doc : null;
+}
+
+async function byField(schoolId: string, name: string, field: string, value: unknown): Promise<Doc[]> {
+  const snapshot = await collection(schoolId, name).where(field, '==', value).get();
+  return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+}
+
+function millis(value: any): number {
+  if (value instanceof Date) return value.getTime();
+  if (value && typeof value.toDate === 'function') return value.toDate().getTime();
+  return new Date(value).getTime();
+}
+
+async function hydrateExamSubject(schoolId: string, item: Doc) {
+  return { ...item, subject: await one(schoolId, 'subjects', item.subjectId) };
+}
+
+async function hydrateResult(schoolId: string, result: Doc, includeStudent = true) {
+  const [exam, examSubject, student] = await Promise.all([
+    one(schoolId, 'exams', result.examId),
+    one(schoolId, 'examSubjects', result.examSubjectId),
+    includeStudent ? one(schoolId, 'students', result.studentId) : Promise.resolve(null),
+  ]);
+  const subject = examSubject ? await one(schoolId, 'subjects', examSubject.subjectId) : null;
+  return {
+    ...result,
+    ...(includeStudent ? { student: student ? {
+      id: student.id, firstName: student.firstName, lastName: student.lastName, admissionNo: student.admissionNo,
+    } : null } : {}),
+    exam,
+    examSubject: examSubject ? { ...examSubject, subject } : null,
+  };
+}
+
 // ---------- EXAMS ----------
 export async function listExams(req: Request, res: Response) {
-  const exams = await prisma.exam.findMany({ where: { schoolId: schoolOf(req) }, include: { subjects: { include: { subject: true } }, session: true }, orderBy: { startDate: 'desc' } });
-  return ok(res, exams, 'Exams fetched');
+  const schoolId = schoolOf(req);
+  const exams = (await all(schoolId, 'exams')).sort((a, b) => millis(b.startDate) - millis(a.startDate));
+  const result = await Promise.all(exams.map(async (exam) => {
+    const [subjects, session] = await Promise.all([
+      byField(schoolId, 'examSubjects', 'examId', exam.id),
+      one(schoolId, 'academicSessions', exam.sessionId),
+    ]);
+    return { ...exam, subjects: await Promise.all(subjects.map((item) => hydrateExamSubject(schoolId, item))), session };
+  }));
+  return ok(res, result, 'Exams fetched');
 }
+
 export async function createExam(req: Request, res: Response) {
   const body = examSchema.parse(req.body);
-  const exam = await prisma.exam.create({ data: { schoolId: schoolOf(req), name: body.name, sessionId: body.sessionId, startDate: new Date(body.startDate), endDate: new Date(body.endDate) } });
-  await auditLog({ userId: req.auth?.sub, schoolId: schoolOf(req), ip: req.ip, action: 'CREATE_EXAM', module: 'EXAMS' });
+  const schoolId = schoolOf(req);
+  const id = randomUUID();
+  const exam = {
+    id, schoolId, name: body.name, sessionId: body.sessionId ?? null,
+    startDate: new Date(body.startDate), endDate: new Date(body.endDate), createdAt: new Date(),
+  };
+  await collection(schoolId, 'exams').doc(id).create(exam);
+  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'CREATE_EXAM', module: 'EXAMS' });
   return created(res, exam, 'Exam created');
 }
 
 // ---------- EXAM SUBJECTS ----------
 export async function addExamSubject(req: Request, res: Response) {
   const body = examSubjectSchema.parse(req.body);
-  const exam = await prisma.exam.findUnique({ where: { id: body.examId } });
-  if (!exam || exam.schoolId !== schoolOf(req)) throw new ApiError(404, 'Exam not found');
-  const existing = await prisma.examSubject.findUnique({ where: { examId_subjectId: { examId: body.examId, subjectId: body.subjectId } } });
-  const record = existing
-    ? await prisma.examSubject.update({ where: { id: existing.id }, data: { maxMarks: body.maxMarks, passMarks: body.passMarks, date: body.date ? new Date(body.date) : undefined } })
-    : await prisma.examSubject.create({ data: { examId: body.examId, subjectId: body.subjectId, maxMarks: body.maxMarks, passMarks: body.passMarks, date: body.date ? new Date(body.date) : undefined } });
+  const schoolId = schoolOf(req);
+  const exam = await one(schoolId, 'exams', body.examId);
+  if (!exam) throw new ApiError(404, 'Exam not found');
+  if (!(await one(schoolId, 'subjects', body.subjectId))) throw new ApiError(404, 'Subject not found');
+
+  const existing = (await byField(schoolId, 'examSubjects', 'examId', body.examId))
+    .find((item) => item.subjectId === body.subjectId);
+  const data = {
+    examId: body.examId, subjectId: body.subjectId, maxMarks: body.maxMarks,
+    passMarks: body.passMarks, date: body.date ? new Date(body.date) : existing?.date ?? null,
+  };
+  if (existing) {
+    await collection(schoolId, 'examSubjects').doc(existing.id).update(data);
+    return created(res, { ...existing, ...data }, 'Exam subject added');
+  }
+  const id = randomUUID();
+  const record = { id, ...data };
+  await collection(schoolId, 'examSubjects').doc(id).create(record);
   return created(res, record, 'Exam subject added');
 }
+
 // ---------- MARKS ----------
 export async function listMarks(req: Request, res: Response) {
   const { examId, examSubjectId } = req.query as { examId?: string; examSubjectId?: string };
   const schoolId = schoolOf(req);
-  const where: any = { schoolId };
-  if (examId) where.examId = examId;
-  if (examSubjectId) where.examSubjectId = examSubjectId;
-  const marks = await prisma.examResult.findMany({ where, include: { student: true, exam: true, examSubject: { include: { subject: true } } } });
-  return ok(res, marks, 'Marks fetched');
+  let marks = await all(schoolId, 'examResults');
+  if (examId) marks = marks.filter((item) => item.examId === examId);
+  if (examSubjectId) marks = marks.filter((item) => item.examSubjectId === examSubjectId);
+  return ok(res, await Promise.all(marks.map((item) => hydrateResult(schoolId, item))), 'Marks fetched');
 }
 
 export async function enterMarks(req: Request, res: Response) {
   const body = enterMarksSchema.parse(req.body);
   const schoolId = schoolOf(req);
-  const es = await prisma.examSubject.findUnique({ where: { id: body.examSubjectId }, include: { exam: true } });
-  if (!es || es.exam?.schoolId !== schoolId) throw new ApiError(404, 'Exam subject not found');
-  for (const m of body.marks) {
-    if (Number(m.marksObtained) > es.maxMarks) throw new ApiError(400, 'Marks exceed max for a student');
-    const existing = await prisma.examResult.findUnique({ where: { examSubjectId_studentId: { examSubjectId: body.examSubjectId, studentId: m.studentId } } });
+  const examSubject = await one(schoolId, 'examSubjects', body.examSubjectId);
+  const exam = examSubject ? await one(schoolId, 'exams', examSubject.examId) : null;
+  if (!examSubject || !exam) throw new ApiError(404, 'Exam subject not found');
+
+  for (const mark of body.marks) {
+    if (Number(mark.marksObtained) > Number(examSubject.maxMarks)) throw new ApiError(400, 'Marks exceed max for a student');
+    const student = await one(schoolId, 'students', mark.studentId);
+    if (!student) throw new ApiError(404, 'Student not found');
+    const existing = (await byField(schoolId, 'examResults', 'examSubjectId', body.examSubjectId))
+      .find((item) => item.studentId === mark.studentId);
     if (existing) {
-      await prisma.examResult.update({ where: { id: existing.id }, data: { marksObtained: m.marksObtained, published: false } });
+      await collection(schoolId, 'examResults').doc(existing.id).update({ marksObtained: String(mark.marksObtained), published: false });
     } else {
-      await prisma.examResult.create({ data: { schoolId, examId: es.examId, examSubjectId: es.id, studentId: m.studentId, marksObtained: m.marksObtained, enteredBy: req.auth?.sub } });
+      const id = randomUUID();
+      await collection(schoolId, 'examResults').doc(id).create({
+        id, schoolId, examId: exam.id, examSubjectId: examSubject.id, studentId: mark.studentId,
+        marksObtained: String(mark.marksObtained), enteredBy: req.auth?.sub ?? null,
+        published: false, createdAt: new Date(),
+      });
     }
   }
   await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'ENTER_MARKS', module: 'EXAMS' });
@@ -61,16 +154,21 @@ export async function enterMarks(req: Request, res: Response) {
 export async function publishResults(req: Request, res: Response) {
   const schoolId = schoolOf(req);
   const { examId } = req.body as { examId: string };
-  const exam = await prisma.exam.findUnique({ where: { id: examId } });
-  if (!exam || exam.schoolId !== schoolId) throw new ApiError(404, 'Exam not found');
-  const examSubjects = await prisma.examSubject.findMany({ where: { examId, exam: { schoolId } }, select: { id: true } });
-  for (const es of examSubjects) {
-    await prisma.examResult.updateMany({ where: { examSubjectId: es.id }, data: { published: true } });
+  const exam = await one(schoolId, 'exams', examId);
+  if (!exam) throw new ApiError(404, 'Exam not found');
+  const examSubjects = await byField(schoolId, 'examSubjects', 'examId', examId);
+  const results = await all(schoolId, 'examResults');
+  const ids = new Set(examSubjects.map((item) => item.id));
+  const toPublish = results.filter((item) => ids.has(item.examSubjectId) && item.published !== true);
+  for (let start = 0; start < toPublish.length; start += 450) {
+    const batch = dbOrThrow().batch();
+    toPublish.slice(start, start + 450).forEach((item) => batch.update(collection(schoolId, 'examResults').doc(item.id), { published: true }));
+    await batch.commit();
   }
-  const students = await prisma.student.findMany({ where: { schoolId }, select: { userId: true } });
-  for (const s of students) {
-    if (!s.userId) continue;
-    await sendNotification({ schoolId, userId: s.userId, type: 'RESULT', title: 'Results Published', message: 'Exam results are now available.' });
+  const students = await all(schoolId, 'students');
+  for (const student of students) {
+    if (!student.userId) continue;
+    await sendNotification({ schoolId, userId: student.userId, type: 'RESULT', title: 'Results Published', message: 'Exam results are now available.' });
   }
   await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'PUBLISH_RESULTS', module: 'EXAMS' });
   return ok(res, null, 'Results published');
@@ -79,32 +177,26 @@ export async function publishResults(req: Request, res: Response) {
 export async function studentResults(req: Request, res: Response) {
   const { studentId, examId, publishedOnly } = req.query as { studentId?: string; examId?: string; publishedOnly?: string };
   const schoolId = schoolOf(req);
-  const where: any = { schoolId };
-    const isStudentRole = req.auth?.roles.includes('STUDENT');
+  let results = await all(schoolId, 'examResults');
+  const isStudentRole = req.auth?.roles.includes('STUDENT');
   if (isStudentRole && !studentId) {
-    // Students see only their own results (and siblings via guardians, if any).
-    // Parents log in with a student's credentials, so the STUDENT branch also
-    // covers the parent use-case. To see a sibling, pass ?studentId=<siblingId>
-    // after the sibling has been looked up on the dashboard.
-    const student = await prisma.student.findFirst({ where: { userId: req.auth!.sub } });
+    const students = await byField(schoolId, 'students', 'userId', req.auth!.sub);
+    const student = students[0];
     if (!student) throw new ApiError(404, 'Student not found');
-        // Allow viewing siblings (same guardians) within the same school.
-    const parentIds = (await prisma.studentParent.findMany({ where: { studentId: student.id }, select: { parentId: true } })).map((p) => p.parentId);
+    const links = await all(schoolId, 'studentParents');
+    const parentIds = links.filter((item) => item.studentId === student.id).map((item) => item.parentId);
     const siblingIds = parentIds.length
-      ? (await prisma.studentParent.findMany({ where: { parentId: { in: parentIds } }, select: { studentId: true } })).map((p) => p.studentId).filter((id) => id !== student.id)
+      ? links.filter((item) => parentIds.includes(item.parentId)).map((item) => item.studentId).filter((id) => id !== student.id)
       : [];
-    const ids = [student.id, ...siblingIds];
-    where.studentId = { in: ids };
+    const ids = new Set([student.id, ...siblingIds]);
+    results = results.filter((item) => ids.has(item.studentId));
   } else if (isStudentRole && studentId) {
-    const student = await prisma.student.findUnique({ where: { id: studentId } });
-    if (!student || student.schoolId !== schoolId) throw new ApiError(404, 'Student not found');
-    where.studentId = studentId;
+    const student = await one(schoolId, 'students', studentId);
+    if (!student) throw new ApiError(404, 'Student not found');
+    results = results.filter((item) => item.studentId === studentId);
   }
-  if (examId) where.examId = examId;
-  if (publishedOnly === 'true') where.published = true;
-  const results = await prisma.examResult.findMany({
-    where, include: { exam: true, examSubject: { include: { subject: true } }, student: { select: { id: true, firstName: true, lastName: true, admissionNo: true } } },
-    orderBy: { createdAt: 'desc' },
-  });
-  return ok(res, results, 'Results fetched');
+  if (examId) results = results.filter((item) => item.examId === examId);
+  if (publishedOnly === 'true') results = results.filter((item) => item.published === true);
+  results.sort((a, b) => millis(b.createdAt) - millis(a.createdAt));
+  return ok(res, await Promise.all(results.map((item) => hydrateResult(schoolId, item))), 'Results fetched');
 }
