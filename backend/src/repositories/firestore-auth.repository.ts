@@ -127,12 +127,18 @@ export function dateFromFirestore(value: any): Date {
 export async function findEmailOtp(
   filters: { email?: string; code?: string; purpose?: string },
 ): Promise<RecordData | null> {
-  let query: any = dbOrThrow().collection('system_emailOtps');
-  if (filters.email !== undefined) query = query.where('email', '==', filters.email);
-  if (filters.code !== undefined) query = query.where('code', '==', filters.code);
-  if (filters.purpose !== undefined) query = query.where('purpose', '==', filters.purpose);
-  const snapshot = await query.limit(1).get();
-  return snapshot.empty ? null : toRecord(snapshot.docs[0]);
+  const db = dbOrThrow();
+  const field = filters.email !== undefined ? 'email' : 'code';
+  const value = filters.email !== undefined ? filters.email : filters.code;
+  if (value === undefined) return null;
+  const snapshot = await db.collection('system_emailOtps').where(field, '==', value).get();
+  const found = snapshot.docs.find((doc) => {
+    const data = doc.data();
+    return (filters.email === undefined || data.email === filters.email)
+      && (filters.code === undefined || data.code === filters.code)
+      && (filters.purpose === undefined || data.purpose === filters.purpose);
+  });
+  return found ? toRecord(found) : null;
 }
 
 export async function upsertEmailOtp(
