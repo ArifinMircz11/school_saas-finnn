@@ -7,6 +7,7 @@ import router from './routes';
 import { errorHandler, notFound } from './utils/response';
 import { apiLimiter } from './middleware/rateLimiter';
 import { requireAuth, requireRole } from './middleware/auth';
+import { prisma } from './config/database';
 
 export const app = express();
 
@@ -32,6 +33,27 @@ app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 app.get('/api/health', (_req: Request, res: Response) => {
   res.status(200).json({ success: true, status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Readiness probe verifies the primary operational database, unlike the liveness probe above.
+// Keep provider details and connection strings out of the public response.
+app.get('/api/health/ready', async (_req: Request, res: Response) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.status(200).json({
+      success: true,
+      status: 'ready',
+      dependencies: { postgresql: 'ok' },
+      timestamp: new Date().toISOString(),
+    });
+  } catch {
+    res.status(503).json({
+      success: false,
+      status: 'not_ready',
+      dependencies: { postgresql: 'unavailable' },
+      timestamp: new Date().toISOString(),
+    });
+  }
 });
 
 // Apply API rate limiting before every API endpoint, including health diagnostics.
