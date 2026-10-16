@@ -118,6 +118,9 @@ export async function updateSchool(req: Request, res: Response) {
   const ref = dbOrThrow().collection('schools').doc(req.params.id);
   const snapshot = await ref.get();
   if (!snapshot.exists) throw new ApiError(404, 'School not found');
+  const otherSchools = (await allSchools()).filter((school) => school.id !== req.params.id);
+  if (body.code && otherSchools.some((school) => school.code === body.code)) throw new ApiError(409, 'School code already exists');
+  if (body.domain && otherSchools.some((school) => school.domain === body.domain)) throw new ApiError(409, 'School domain already exists');
   const patch = { ...omitUndefined(body as Record<string, unknown>), updatedAt: new Date() };
   await ref.update(patch);
   const school = { id: snapshot.id, ...snapshot.data(), ...patch };
