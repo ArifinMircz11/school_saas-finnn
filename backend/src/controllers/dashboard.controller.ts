@@ -19,6 +19,11 @@ async function all(schoolId: string, name: string): Promise<Doc[]> {
   return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 }
 
+async function byField(schoolId: string, name: string, field: string, value: unknown): Promise<Doc[]> {
+  const snapshot = await collection(schoolId, name).where(field, '==', value).get();
+  return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+}
+
 async function one(schoolId: string, name: string, id?: string | null): Promise<Doc | null> {
   if (!id) return null;
   const snapshot = await collection(schoolId, name).doc(id).get();
@@ -38,15 +43,15 @@ function within(value: any, start: Date, end: Date): boolean {
 }
 
 async function hydrateStudent(schoolId: string, student: Doc): Promise<Doc> {
-  const [cls, section, attendance, fees] = await Promise.all([
+  const [cls, section, recentAttendance, fees] = await Promise.all([
     one(schoolId, 'classes', student.classId),
     one(schoolId, 'sections', student.sectionId),
-    all(schoolId, 'attendances'),
-    all(schoolId, 'studentFees'),
+    byField(schoolId, 'attendances', 'studentId', student.id),
+    byField(schoolId, 'studentFees', 'studentId', student.id),
   ]);
-  const recentAttendance = attendance.filter((item) => item.studentId === student.id)
-    .sort((a, b) => time(b.date) - time(a.date)).slice(0, 30);
-  const ownFees = await Promise.all(fees.filter((fee) => fee.studentId === student.id).map(async (fee) => ({
+  recentAttendance.sort((a, b) => time(b.date) - time(a.date));
+  recentAttendance.splice(30);
+  const ownFees = await Promise.all(fees.map(async (fee) => ({
     ...fee,
     structure: await one(schoolId, 'feeStructures', fee.structureId),
   })));
@@ -75,17 +80,15 @@ export async function getDashboard(req: Request, res: Response) {
 
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
-  const [students, teachers, parents, attendanceRows, feePayments, studentFees, admissions, documents] = await Promise.all([
-    all(schoolId, 'students'), all(schoolId, 'teachers'), all(schoolId, 'parents'),
-    all(schoolId, 'attendances'), all(schoolId, 'feePayments'), all(schoolId, 'studentFees'),
-    all(schoolId, 'admissions'), all(schoolId, 'studentDocuments'),
-  ]);
-  const activeStudents = students.filter((student) => student.deletedAt == null);
-  const totalStudents = activeStudents.length;
-  const totalTeachers = teachers.length;
-  const totalParents = parents.length;
-
   if (roles.includes('SCHOOL_ADMIN')) {
+    const [students, teachers, parents, attendanceRows, feePayments, studentFees, admissions, documents] = await Promise.all([
+      all(schoolId, 'students'), all(schoolId, 'teachers'), all(schoolId, 'parents'),
+      all(schoolId, 'attendances'), all(schoolId, 'feePayments'), all(schoolId, 'studentFees'),
+      all(schoolId, 'admissions'), all(schoolId, 'studentDocuments'),
+    ]);
+    const totalStudents = students.filter((student) => student.deletedAt == null).length;
+    const totalTeachers = teachers.length;
+    const totalParents = parents.length;
     const todayAttendance = attendanceRows.filter((row) => within(row.date, today, tomorrow)).length;
     const todayFees = feePayments.filter((row) => within(row.paidAt, today, tomorrow))
       .reduce((sum, row) => sum + Number(row.amount || 0), 0);
@@ -107,11 +110,13 @@ export async function getDashboard(req: Request, res: Response) {
   }
 
   if (roles.includes('TEACHER')) {
-    const teacher = teachers.find((item) => item.userId === req.auth!.sub) || null;
-    const [teacherSections, teacherSubjects, timetables, homework] = await Promise.all([
+    const [students, teachers, teacherSections, teacherSubjects, timetables, homework] = await Promise.all([
+      all(schoolId, 'students'), all(schoolId, 'teachers'),
       all(schoolId, 'teacherSections'), all(schoolId, 'teacherSubjects'),
       all(schoolId, 'timetables'), all(schoolId, 'homeworks'),
     ]);
+    const activeStudents = students.filter((student) => student.deletedAt == null);
+    const teacher = teachers.find((item) => item.userId === req.auth!.sub) || null;
     const sectionLinks = teacherSections.filter((link) => link.teacherId === teacher?.id);
     const subjectLinks = teacherSubjects.filter((link) => link.teacherId === teacher?.id);
     const sections = await Promise.all(sectionLinks.map(async (link) => {
@@ -132,13 +137,12 @@ export async function getDashboard(req: Request, res: Response) {
   }
 
   if (roles.includes('STUDENT') || roles.includes('PARENT')) {
-    const [studentRows, studentParentLinks, notificationRows, homeworkRows] = await Promise.all([
-      Promise.resolve(students),
-      all(schoolId, 'studentParents'),
-      all(schoolId, 'notifications'),
+    const [students, parents, studentParentLinks, notificationRows, homeworkRows] = await Promise.all([
+      all(schoolId, 'students'), all(schoolId, 'parents'), all(schoolId, 'studentParents'),
+      byField(schoolId, 'notifications', 'userId', req.auth!.sub),
       all(schoolId, 'homeworks'),
     ]);
-    let studentRow = studentRows.find((item) => item.userId === req.auth!.sub) || null;
+    let studentRow = students.find((item) => item.userId === req.auth!.sub) || null;
     let student: Doc | null = studentRow ? await hydrateStudent(schoolId, studentRow) : null;
     let siblings: Doc[] = [];
 
@@ -170,7 +174,7 @@ export async function getDashboard(req: Request, res: Response) {
     const attendancePct = attendance.length
       ? Math.round((attendance.filter((item: Doc) => item.status === 'PRESENT').length / attendance.length) * 100)
       : 0;
-    const unread = notificationRows.filter((item) => item.userId === req.auth!.sub && item.read === false).length;
+    const unread = notificationRows.filter((item) => item.read === false).length;
     const reportAnalysis = await buildReportAnalysis(schoolId, student?.id);
     const allChildren = [
       ...(student ? [{ student, guardians, reportAnalysis }] : []),
