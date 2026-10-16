@@ -1,11 +1,25 @@
 import { Request, Response } from 'express';
-import { prisma } from '../config/database';
+import { randomUUID } from 'node:crypto';
+import { getFirestoreInstance } from '../config/firestore';
 import { ApiError, ok, created } from '../utils/response';
 import { studentSchema } from '../validators';
 import { auditLog } from '../utils/audit';
 import { hashPassword, generateAdmissionNo } from '../utils/password';
 import { grantStudentDefaults } from './user.controller';
+import { findUserByEmail, updateUser as updateUserDocument } from '../repositories/firestore-auth.repository';
 import crypto from 'crypto';
+
+type Doc = Record<string, any>;
+
+function dbOrThrow() {
+  const db = getFirestoreInstance();
+  if (!db) throw new ApiError(503, 'Firestore is not configured');
+  return db;
+}
+
+function collection(schoolId: string, name: string) {
+  return dbOrThrow().collection('schools').doc(schoolId).collection(name);
+}
 
 export function schoolOf(req: Request): string {
   const schoolId = req.auth?.schoolId;
@@ -16,97 +30,173 @@ export function schoolOf(req: Request): string {
   return schoolId;
 }
 
+async function all(schoolId: string, name: string): Promise<Doc[]> {
+  const snapshot = await collection(schoolId, name).get();
+  return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+}
+
+async function byField(schoolId: string, name: string, field: string, value: unknown): Promise<Doc[]> {
+  const snapshot = await collection(schoolId, name).where(field, '==', value).get();
+  return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+}
+
+async function one(schoolId: string, name: string, id?: string | null): Promise<Doc | null> {
+  if (!id) return null;
+  const snapshot = await collection(schoolId, name).doc(id).get();
+  return snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null;
+}
+
+function millis(value: any): number {
+  if (value instanceof Date) return value.getTime();
+  if (value && typeof value.toDate === 'function') return value.toDate().getTime();
+  return new Date(value).getTime();
+}
+
+async function hydrateStudent(schoolId: string, student: Doc, detail = false): Promise<Doc> {
+  const [cls, section, links, parents] = await Promise.all([
+    one(schoolId, 'classes', student.classId),
+    one(schoolId, 'sections', student.sectionId),
+    byField(schoolId, 'studentParents', 'studentId', student.id),
+    all(schoolId, 'parents'),
+  ]);
+  const hydratedParents = links.map((link) => ({
+    ...link,
+    parent: parents.find((parent) => parent.id === link.parentId) || null,
+  }));
+  const result: Doc = { ...student, class: cls, section, parents: hydratedParents };
+  if (detail) {
+    const [fees, documents, attendance] = await Promise.all([
+      byField(schoolId, 'studentFees', 'studentId', student.id),
+      byField(schoolId, 'studentDocuments', 'studentId', student.id),
+      byField(schoolId, 'attendances', 'studentId', student.id),
+    ]);
+    result.fees = await Promise.all(fees.map(async (fee) => ({
+      ...fee,
+      structure: await one(schoolId, 'feeStructures', fee.structureId),
+      payments: await byField(schoolId, 'feePayments', 'studentFeeId', fee.id),
+    })));
+    result.documents = documents;
+    result.attendance = attendance.sort((a, b) => millis(b.date) - millis(a.date)).slice(0, 30);
+  }
+  return result;
+}
+
 // ---------- STUDENTS ----------
 export async function listStudents(req: Request, res: Response) {
   const { classId, sectionId, q } = req.query as { classId?: string; sectionId?: string; q?: string };
-  const where: any = { schoolId: schoolOf(req), deletedAt: null };
-  if (classId) where.classId = classId;
-  if (sectionId) where.sectionId = sectionId;
-  if (q) where.OR = [
-    { firstName: { contains: q, mode: 'insensitive' } },
-    { lastName: { contains: q, mode: 'insensitive' } },
-    { admissionNo: { contains: q, mode: 'insensitive' } },
-  ];
-  const students = await prisma.student.findMany({
-    where, include: { class: true, section: true, parents: { include: { parent: true } } }, orderBy: { admissionNo: 'asc' },
-  });
-  return ok(res, students, 'Students fetched');
+  const schoolId = schoolOf(req);
+  let students = (await all(schoolId, 'students')).filter((student) => student.deletedAt == null);
+  if (classId) students = students.filter((student) => student.classId === classId);
+  if (sectionId) students = students.filter((student) => student.sectionId === sectionId);
+  if (q) {
+    const query = q.toLowerCase();
+    students = students.filter((student) =>
+      [student.firstName, student.lastName, student.admissionNo].some((value) => String(value || '').toLowerCase().includes(query)));
+  }
+  students.sort((a, b) => String(a.admissionNo).localeCompare(String(b.admissionNo)));
+  return ok(res, await Promise.all(students.map((student) => hydrateStudent(schoolId, student))), 'Students fetched');
 }
 
 export async function getStudent(req: Request, res: Response) {
-  const student = await prisma.student.findUnique({
-    where: { id: req.params.id },
-    include: { class: true, section: true, parents: { include: { parent: true } }, fees: { include: { structure: true, payments: true } }, documents: true, attendance: { take: 30, orderBy: { date: 'desc' } } },
-  });
-  if (!student || student.schoolId !== schoolOf(req)) throw new ApiError(404, 'Student not found');
-  return ok(res, student, 'Student fetched');
+  const schoolId = schoolOf(req);
+  const student = await one(schoolId, 'students', req.params.id);
+  if (!student || student.schoolId !== schoolId) throw new ApiError(404, 'Student not found');
+  return ok(res, await hydrateStudent(schoolId, student, true), 'Student fetched');
 }
 
 export async function createStudent(req: Request, res: Response) {
   const body = studentSchema.parse(req.body);
   const schoolId = schoolOf(req);
-  const school = await prisma.school.findUnique({ where: { id: schoolId } });
-  const studentCount = await prisma.student.count({ where: { schoolId, deletedAt: null } });
-  if (school && studentCount >= school.maxStudents) throw new ApiError(400, 'Student limit reached for this school');
+  const db = dbOrThrow();
+  const schoolSnap = await db.collection('schools').doc(schoolId).get();
+  const school = schoolSnap.exists ? schoolSnap.data() : null;
+  const currentStudents = await all(schoolId, 'students');
+  const studentCount = currentStudents.filter((student) => student.deletedAt == null).length;
+  if (school && studentCount >= Number(school.maxStudents ?? 1000)) throw new ApiError(400, 'Student limit reached for this school');
 
   const admissionNo = generateAdmissionNo();
-  // Every student gets a UNIQUE login (even siblings). Parents log in with
-  // the student's credentials — no shared family account.
   const password = body.password || crypto.randomBytes(16).toString('base64').slice(0, 12);
   const passwordHash = await hashPassword(password);
-  // Unique email per student (siblings never share). Uses admission number by default,
-  // or the student's own email if explicitly provided.
   const studentEmail = body.email && !body.parentEmail
     ? body.email.toLowerCase()
     : `${admissionNo.toLowerCase()}@student.${schoolId}.local`;
-  const student = await prisma.$transaction(async (tx) => {
-    let user = await tx.user.findUnique({ where: { email: studentEmail } });
-    if (!user) {
-      user = await tx.user.create({
-        data: { schoolId, email: studentEmail, firstName: body.firstName, lastName: body.lastName, passwordHash, roles: { create: [{ role: 'STUDENT' }] } },
-      });
-    } else {
-      await tx.user.update({ where: { id: user.id }, data: { passwordHash, firstName: body.firstName, lastName: body.lastName } });
-    }
-    const s = await tx.student.create({
-      data: {
-        schoolId, firstName: body.firstName, lastName: body.lastName,
-        gender: body.gender, dob: new Date(body.dob), classId: body.classId, sectionId: body.sectionId,
-        bloodGroup: body.bloodGroup, address: body.address, photoUrl: body.photoUrl, admissionNo, userId: user.id,
-      },
+  let user = await findUserByEmail(studentEmail);
+  if (user && user.schoolId !== schoolId) throw new ApiError(409, 'Email already belongs to another school account');
+
+  const batch = db.batch();
+  if (!user) {
+    const userId = randomUUID();
+    user = {
+      id: userId, schoolId, email: studentEmail, firstName: body.firstName, lastName: body.lastName,
+      phone: null, passwordHash, avatarUrl: null, emailVerified: false, isActive: true,
+      lastLoginAt: null, deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+      _docPath: `schools/${schoolId}/users/${userId}`,
+    };
+    batch.create(collection(schoolId, 'users').doc(userId), {
+      id: userId, schoolId, email: studentEmail, firstName: body.firstName, lastName: body.lastName,
+      phone: null, passwordHash, avatarUrl: null, emailVerified: false, isActive: true,
+      lastLoginAt: null, deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
     });
-    // Guardian contact info stored as data only (no separate login account).
-    if (body.parentEmail || body.parentPhone || body.parentName) {
-      const parent = await tx.parent.create({
-        data: { schoolId, firstName: body.parentName || 'Guardian', lastName: '', phone: body.parentPhone || null },
-      });
-      await tx.studentParent.create({ data: { studentId: s.id, parentId: parent.id, relationship: 'PARENT', isPrimary: true } });
-    }
-    return s;
-  });
-  // Grant STUDENT default permissions so the portal has no dead ends.
-  const createdUser = await prisma.user.findUnique({ where: { email: studentEmail }, select: { id: true } });
-  if (createdUser) await grantStudentDefaults(createdUser.id);
+    const roleId = randomUUID();
+    batch.create(collection(schoolId, 'userRoleAssignments').doc(roleId), {
+      id: roleId, userId, role: 'STUDENT', assignedBy: req.auth?.sub ?? null,
+    });
+  } else {
+    batch.update(db.doc(user._docPath!), {
+      passwordHash, firstName: body.firstName, lastName: body.lastName, updatedAt: new Date(),
+    });
+  }
+
+  const studentId = randomUUID();
+  const student: Doc = {
+    id: studentId, schoolId, firstName: body.firstName, lastName: body.lastName,
+    gender: body.gender, dob: new Date(body.dob), classId: body.classId ?? null,
+    sectionId: body.sectionId ?? null, bloodGroup: body.bloodGroup ?? null,
+    address: body.address ?? null, photoUrl: body.photoUrl ?? null, admissionNo,
+    userId: user.id, rollNo: null, enrollmentDate: new Date(), isActive: true,
+    deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+  };
+  batch.create(collection(schoolId, 'students').doc(studentId), student);
+
+  if (body.parentEmail || body.parentPhone || body.parentName) {
+    const parentId = randomUUID();
+    const linkId = randomUUID();
+    batch.create(collection(schoolId, 'parents').doc(parentId), {
+      id: parentId, schoolId, userId: null, firstName: body.parentName || 'Guardian',
+      lastName: '', phone: body.parentPhone || null, occupation: null, createdAt: new Date(),
+    });
+    batch.create(collection(schoolId, 'studentParents').doc(linkId), {
+      id: linkId, studentId, parentId, relationship: 'PARENT', isPrimary: true,
+    });
+  }
+  await batch.commit();
+  await grantStudentDefaults(user.id);
   await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'CREATE_STUDENT', module: 'STUDENTS', details: { id: student.id } });
-  return created(res, { ...student }, 'Student created — one family login created (parents use the student\'s credentials)');
+  return created(res, student, 'Student created — one family login created (parents use the student\'s credentials)');
 }
 
 export async function updateStudent(req: Request, res: Response) {
   const body = studentSchema.parse(req.body);
-  const existing = await prisma.student.findUnique({ where: { id: req.params.id } });
-  if (!existing || existing.schoolId !== schoolOf(req)) throw new ApiError(404, 'Student not found');
-  const student = await prisma.student.update({
-    where: { id: req.params.id },
-    data: { firstName: body.firstName, lastName: body.lastName, gender: body.gender, dob: new Date(body.dob), classId: body.classId, sectionId: body.sectionId, bloodGroup: body.bloodGroup, address: body.address, photoUrl: body.photoUrl },
-  });
-  await auditLog({ userId: req.auth?.sub, schoolId: schoolOf(req), ip: req.ip, action: 'UPDATE_STUDENT', module: 'STUDENTS' });
-  return ok(res, student, 'Student updated');
+  const schoolId = schoolOf(req);
+  const existing = await one(schoolId, 'students', req.params.id);
+  if (!existing || existing.schoolId !== schoolId) throw new ApiError(404, 'Student not found');
+  const patch = {
+    firstName: body.firstName, lastName: body.lastName, gender: body.gender,
+    dob: new Date(body.dob), classId: body.classId ?? null, sectionId: body.sectionId ?? null,
+    bloodGroup: body.bloodGroup ?? null, address: body.address ?? null,
+    photoUrl: body.photoUrl ?? null, updatedAt: new Date(),
+  };
+  await collection(schoolId, 'students').doc(req.params.id).update(patch);
+  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'UPDATE_STUDENT', module: 'STUDENTS' });
+  return ok(res, { ...existing, ...patch }, 'Student updated');
 }
 
 export async function deleteStudent(req: Request, res: Response) {
-  const existing = await prisma.student.findUnique({ where: { id: req.params.id } });
-  if (!existing || existing.schoolId !== schoolOf(req)) throw new ApiError(404, 'Student not found');
-  await prisma.student.update({ where: { id: req.params.id }, data: { deletedAt: new Date() } });
-  await auditLog({ userId: req.auth?.sub, schoolId: schoolOf(req), ip: req.ip, action: 'DELETE_STUDENT', module: 'STUDENTS' });
+  const schoolId = schoolOf(req);
+  const existing = await one(schoolId, 'students', req.params.id);
+  if (!existing || existing.schoolId !== schoolId) throw new ApiError(404, 'Student not found');
+  const deletedAt = new Date();
+  await collection(schoolId, 'students').doc(req.params.id).update({ deletedAt, updatedAt: new Date() });
+  await auditLog({ userId: req.auth?.sub, schoolId, ip: req.ip, action: 'DELETE_STUDENT', module: 'STUDENTS' });
   return ok(res, null, 'Student soft-deleted');
 }
