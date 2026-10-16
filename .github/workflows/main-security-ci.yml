@@ -3,6 +3,7 @@ name: Main Security and Build Verification
 on:
   push:
     branches:
+      - main
       - fix/main-security-audit-2026-10-16
   pull_request:
     branches:
